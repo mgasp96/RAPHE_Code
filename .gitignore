@@ -14,6 +14,12 @@ __pycache__/
 # Large data and outputs (sequencing data: GHGA; source data: provided with the paper)
 Sequencing/data/*
 !Sequencing/data/.gitkeep
+!Sequencing/data/002_Integrated_export/
+Sequencing/data/002_Integrated_export/*
+!Sequencing/data/002_Integrated_export/metadata_slim_celltypist.csv
+!Sequencing/data/002_Integrated_export/rna_mtx/
+Sequencing/data/002_Integrated_export/rna_mtx/*
+!Sequencing/data/002_Integrated_export/rna_mtx/umap_HVG.csv
 Sequencing/Figures/*
 !Sequencing/Figures/.gitkeep
 Sequencing/rawdata/*

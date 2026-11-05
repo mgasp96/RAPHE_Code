@@ -24,6 +24,7 @@ RAPHE_Code/
 │   │   └── Set_functions.R                             QC and GO plotting functions sourced by the scripts
 │   ├── rawdata/Quantifications/                        qPCR and immunostaining quantification tables read by 004 and 005
 │   ├── data/                                           intermediate objects written by the scripts (download from GHGA)
+│   │   └── 002_Integrated_export/                      final cell-type annotation (metadata_slim_celltypist.csv) and HVG UMAP (rna_mtx/umap_HVG.csv) read by 003
 │   └── Figures/                                        figure output (not tracked)
 └── sDarken/                                            sDarken serotonin sensor imaging analysis (see sDarken/README.md)
     ├── code/calcimetrics/                              Python package for ImageJ/Fiji ROI fluorescence exports
