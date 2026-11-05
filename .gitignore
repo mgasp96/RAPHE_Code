@@ -11,7 +11,7 @@ __pycache__/
 *.egg-info/
 .ipynb_checkpoints/
 
-# Large data and outputs (sequencing data: GHGA; source data: provided with the paper)
+# Large data and outputs (sequencing data: GHGA)
 Sequencing/data/*
 !Sequencing/data/.gitkeep
 !Sequencing/data/002_Integrated_export/
@@ -25,8 +25,6 @@ Sequencing/Figures/*
 !Sequencing/Figures/.gitkeep
 Sequencing/rawdata/*
 !Sequencing/rawdata/Quantifications/
-sDarken/input_data/*
-!sDarken/input_data/.gitkeep
 sDarken/figures/*
 !sDarken/figures/.gitkeep
 *.rds

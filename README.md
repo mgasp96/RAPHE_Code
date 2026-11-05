@@ -29,7 +29,7 @@ RAPHE_Code/
 └── sDarken/                                            sDarken serotonin sensor imaging analysis (see sDarken/README.md)
     ├── code/calcimetrics/                              Python package for ImageJ/Fiji ROI fluorescence exports
     ├── notebooks/                                      acute slice, fused organoid and dissociated neuron analyses
-    ├── input_data/                                     place the source data here (see Data availability)
+    ├── input_data/                                     ImageJ/Fiji ROI exports and ROI sets for all recordings
     └── figures/                                        figure output (not tracked)
 ```
 
@@ -39,7 +39,7 @@ All R scripts use paths relative to `Sequencing/scripts/` and should be run from
 
 The RNA sequencing data generated in this study have been deposited in the German Human Genome-Phenome Archive (GHGA) under accession code GHGAS76412448666741. Cell Ranger outputs (`filtered_feature_bc_matrix`) for each library are expected in `Sequencing/rawdata/<sample>/` (CO_CTRL, CO_FUSED, RO_CTRL, RO_FUSED).
 
-Source data for all other analyses are provided with the paper.
+Input data for the sDarken imaging analysis are included in `sDarken/input_data/`. Source data for all other analyses are provided with the paper.
 
 ## Software
 

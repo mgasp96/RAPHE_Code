@@ -95,7 +95,7 @@ jupyter lab notebooks/
 
 - **`02_darken_reanalysis.ipynb`** — Run all cells. Figures are saved to `figures/` automatically when `SAVE_FIGURES = True`.
 - **`03_fusion_reanalysis.ipynb`** — Run all cells. Figures are saved to `figures/darken_fusion/` automatically.
-- **`04_darken_reanalysis_diss.ipynb`** — Section 0 regenerates the `_cleaned.csv` files from the raw CSVs. Sections 1–5 run the full analysis and produce all figures.
+- **`04_darken_reanalysis_diss.ipynb`** — Section 0 regenerates the `_cleaned.csv` files from the raw CSVs (already included). Sections 1–5 run the full analysis and produce all figures.
 
 ---
 
@@ -119,7 +119,7 @@ The `calcimetrics` package provides a modular pipeline for fluorescence imaging 
 
 ### Input Data
 
-Input data are provided as Source Data with the paper and are not included in this repository; place them in `input_data/` following the structure above. Raw data are ImageJ Mean Grey Value exports (`Results_*.csv`). Each CSV contains one column per ROI plus a background ROI column. ROI sets (`.zip`) are the corresponding Fiji ROI manager files and can be re-opened in Fiji alongside the original microscopy data to inspect ROI placement.
+Raw data are ImageJ Mean Grey Value exports (`Results_*.csv`). Each CSV contains one column per ROI plus a background ROI column. ROI sets (`.zip`) are the corresponding Fiji ROI manager files and can be re-opened in Fiji alongside the original microscopy data to inspect ROI placement.
 
 ---
 
