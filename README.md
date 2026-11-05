@@ -3,7 +3,7 @@
 Scripts for the analysis of data published in:
 
 **Serotonergic innervation and cortical progenitor regulation in human brain assembloids**
-Pérez Fernández, Gasparotto, et al. (2026)
+Pérez Fernández, Siekmann, et al. (2026)
 
 This repository contains the R, Python and Jupyter code used for all computational analyses in the study. Scripts are numbered in the order in which they were run.
 
@@ -23,7 +23,7 @@ RAPHE_Code/
 │   │   ├── Set_environment.R                           packages and colour palettes sourced by the scripts
 │   │   └── Set_functions.R                             QC and GO plotting functions sourced by the scripts
 │   ├── rawdata/Quantifications/                        qPCR and immunostaining quantification tables read by 004 and 005
-│   ├── data/                                           intermediate objects written by the scripts (not tracked)
+│   ├── data/                                           intermediate objects written by the scripts (download from GHGA)
 │   └── Figures/                                        figure output (not tracked)
 └── sDarken/                                            sDarken serotonin sensor imaging analysis (see sDarken/README.md)
     ├── code/calcimetrics/                              Python package for ImageJ/Fiji ROI fluorescence exports
@@ -47,7 +47,7 @@ Source data for all other analyses are provided with the paper.
 
 ## Contributors
 
-RPF (Raquel Pérez Fernández), MG (Matteo Gasparotto)
+RPF (Raquel Pérez Fernández), MG (Matteo Gasparotto), LW (Lutz Wallhorn)
 
 ## License
 
