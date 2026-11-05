@@ -1,0 +1,754 @@
+---
+title: "004_Quantifications"
+date: "2026/03/17"
+description: "034_qPCR_data"
+output: 
+  bookdown::html_document2:
+    code_folding: hide
+    fig_caption: true
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: yes
+link-citations: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, tidy.opts=list(width.cutoff=80),tidy=TRUE, fig.asp=0.5, fig.width=12, warning = FALSE, message=FALSE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+source("../helpers/Set_environment.R")
+source("../helpers/Set_functions.R")
+mem.maxVSize(16384*6) 
+set.seed(42)
+options(future.globals.maxSize = 10000 * 1024^3)
+options(mc.cores = parallel::detectCores() - 1)
+library(readxl)
+library(rstatix)
+library(ggpubr)
+library(scales)
+```
+
+# Figure 1D, F, H
+
+```{r}
+data<-read.csv("../rawdata/Quantifications/qPCR_data.csv")
+```
+
+```{r}
+bar_color  <- "#4DBBD5"
+point_size <- 0.5
+out_dir    <- "../Figures"
+
+genes_keep <- c("FOXA2", "GBX2", "NKX2.2", "OTX2")
+cmp <- list(c("D0","D12"), c("D12","D17"), c("D17","D24"))
+
+ddct_df <- data %>%
+  dplyr::mutate(
+    Target.Name = toupper(trimws(Target.Name)),
+    Treatment = factor(Treatment, levels = c("D0", "D12", "D17", "D24"))
+  ) %>%
+  dplyr::filter(Target.Name != "18S", !is.na(dCt), !is.na(Treatment)) %>%
+  dplyr::group_by(Target.Name, sheet) %>%
+  dplyr::mutate(
+    dCt_ref_D0 = mean(dCt[Treatment == "D0"], na.rm = TRUE),
+    ddCt       = dCt - dCt_ref_D0,
+    FC         = 2^(-ddCt)
+  ) %>%
+  dplyr::ungroup()
+
+
+dfp <- ddct_df %>%
+  mutate(
+    Target.Name = toupper(trimws(Target.Name)),
+    Treatment = factor(as.character(Treatment),
+                       levels = c("D0","D12","D17","D24"))
+  ) %>%
+  filter(
+    Target.Name %in% genes_keep,
+    is.finite(FC),
+    !is.na(sheet)
+  ) %>%
+  mutate(log2FC = log2(FC))
+
+stat_df <- dfp %>%
+  group_by(Target.Name) %>%
+  rstatix::t_test(log2FC ~ Treatment, comparisons = cmp) %>%
+  rstatix::adjust_pvalue(method = "BH") %>%
+  rstatix::add_significance("p.adj") %>%
+  left_join(
+    dfp %>%
+      group_by(Target.Name) %>%
+      summarise(
+        fc_min = min(FC, na.rm = TRUE),
+        fc_max = max(FC, na.rm = TRUE),
+        .groups = "drop"
+      ),
+    by = "Target.Name"
+  ) %>%
+  group_by(Target.Name) %>%
+  mutate(step = (fc_max - fc_min) * 0.06) %>%
+  rowwise() %>%
+  mutate(
+    y.position = max(
+      dfp$FC[dfp$Target.Name == Target.Name &
+               dfp$Treatment %in% c(group1, group2)],
+      na.rm = TRUE
+    ) + step * row_number()
+  ) %>%
+  ungroup()
+
+sci_lab_expr <- function(x) {
+  x <- as.numeric(x)
+  out <- vector("list", length(x))
+
+  for (i in seq_along(x)) {
+    v <- x[i]
+    if (!is.finite(v)) {
+      out[[i]] <- NA
+    } else if (v == 0) {
+      out[[i]] <- 0
+    } else if (abs(v) < 100) {
+      out[[i]] <- v
+    } else {
+      e <- floor(log10(abs(v)))
+      m <- signif(v / 10^e, 2)
+      out[[i]] <- bquote(.(m) %*% 10^.(e))
+    }
+  }
+
+  as.expression(out)
+}
+
+make_gene_plot <- function(g) {
+
+  d <- dfp %>% filter(Target.Name == g)
+  s <- stat_df %>% filter(Target.Name == g)
+
+  y_top <- max(c(d$FC, s$y.position), na.rm = TRUE)
+  y_lim <- y_top * 1.12
+
+
+  brks <- scales::breaks_extended(n = 4)(c(0, y_lim))
+  brks <- brks[is.finite(brks) & brks >= 0 & brks <= y_lim]
+  brks <- sort(unique(brks))
+  if (length(brks) == 0) brks <- c(0, y_lim)
+
+  ggplot(d, aes(x = Treatment, y = FC)) +
+    geom_boxplot(fill = bar_color, outlier.shape = NA, width = 0.6) +
+    geom_jitter(aes(shape = sheet),
+                width = 0.12, height = 0, size = point_size) +
+    ggpubr::stat_pvalue_manual(
+      s, label = "p.adj.signif", tip.length = 0.01, hide.ns = TRUE
+    ) +
+    scale_y_continuous(
+      limits = c(0, y_lim),
+      expand = expansion(mult = c(0, 0.02)),
+      breaks = brks,
+      labels = sci_lab_expr(brks),
+      minor_breaks = NULL
+    ) +
+    labs(x = NULL, y = NULL) +
+    theme_classic(base_size = 6) +
+    theme(
+      legend.position = "none",
+      axis.text = element_text(size = 6),
+      axis.ticks.length = unit(1, "pt"),
+      plot.margin = margin(0, 0, 0, 0, unit = "mm")
+    )
+}
+
+plots <- setNames(lapply(genes_keep, make_gene_plot), genes_keep)
+
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+
+for (g in genes_keep) {
+  ggsave(
+    filename = file.path(out_dir, paste0(g, "_FC_boxplot.png")),
+    plot = plots[[g]],
+    width = 29, height = 24, units = "mm",
+    dpi = 600
+  )
+  ggsave(
+    filename = file.path(out_dir, paste0(g, "_FC_boxplot.pdf")),
+    plot = plots[[g]],
+    width = 29, height = 24, units = "mm"
+  )
+}
+
+```
+```{r}
+for (g in genes_keep) {
+
+  s_num <- stat_df %>%
+    dplyr::filter(Target.Name == g) %>%
+    dplyr::filter(
+      (group1 == "D0"  & group2 == "D12") |
+      (group1 == "D12" & group2 == "D17") |
+      (group1 == "D17" & group2 == "D24")
+    ) %>%
+    dplyr::mutate(p_label = ifelse(p.adj < 0.05, sprintf("p=%.2e", p.adj), NA_character_))
+
+  p_noy <- ggplot(dfp %>% dplyr::filter(Target.Name == g),
+                  aes(x = Treatment, y = FC)) +
+    geom_boxplot(fill = bar_color, outlier.shape = NA, width = 0.6) +
+    geom_jitter(aes(shape = sheet),
+                width = 0.12, height = 0, size = point_size) +
+    ggpubr::stat_pvalue_manual(
+      s_num,
+      label = "p_label",
+      tip.length = 0.01,
+      hide.ns = TRUE,   
+      size = 4 / .pt   
+    ) +
+    { 
+      d <- dfp %>% dplyr::filter(Target.Name == g)
+      y_top <- max(c(d$FC, s_num$y.position), na.rm = TRUE)
+      y_lim <- y_top * 1.12
+      brks <- scales::breaks_extended(n = 4)(c(0, y_lim))
+      brks <- brks[is.finite(brks) & brks >= 0 & brks <= y_lim]
+      brks <- sort(unique(brks))
+      if (length(brks) == 0) brks <- c(0, y_lim)
+
+      scale_y_continuous(
+        limits = c(0, y_lim),
+        expand = expansion(mult = c(0, 0.02)),
+        breaks = brks,
+        labels = sci_lab_expr(brks),
+        minor_breaks = NULL
+      )
+    } +
+    labs(x = NULL, y = NULL) +
+    theme_classic(base_size = 6) +
+    theme(
+      legend.position = "none",
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.text.x = element_text(size = 6),
+      axis.ticks.length = unit(1, "pt"),
+      plot.margin = margin(0, 0, 0, 3, unit = "mm")
+    )
+
+  ggsave(
+    filename = file.path(out_dir, paste0(g, "_FC_boxplot_noY_22mm.png")),
+    plot = p_noy,
+    width = 22, height = 24, units = "mm",
+    dpi = 600
+  )
+
+  ggsave(
+    filename = file.path(out_dir, paste0(g, "_FC_boxplot_noY_22mm.pdf")),
+    plot = p_noy,
+    width = 22, height = 24, units = "mm"
+  )
+}
+```
+```{r}
+for (g in genes_keep) {
+
+  s_num <- stat_df %>%
+    dplyr::filter(Target.Name == g) %>%
+    dplyr::filter(
+      (group1 == "D0"  & group2 == "D12") |
+      (group1 == "D12" & group2 == "D17") |
+      (group1 == "D17" & group2 == "D24")
+    ) %>%
+    dplyr::mutate(p_label = ifelse(p.adj < 0.05, sprintf("p=%.2e", p.adj), NA_character_))
+
+  p_noy <- ggplot(dfp %>% dplyr::filter(Target.Name == g),
+                  aes(x = Treatment, y = FC)) +
+    geom_boxplot(fill = bar_color, outlier.shape = NA, width = 0.6) +
+    geom_jitter(aes(shape = sheet),
+                width = 0.12, height = 0, size = point_size) +
+    ggpubr::stat_pvalue_manual(
+      s_num,
+      label = "p_label",
+      tip.length = 0.01,
+      hide.ns = TRUE,  
+      size = 4 / .pt  
+    ) +
+    {
+      d <- dfp %>% dplyr::filter(Target.Name == g)
+      y_top <- max(c(d$FC, s_num$y.position), na.rm = TRUE)
+      y_lim <- y_top * 1.12
+      brks <- scales::breaks_extended(n = 4)(c(0, y_lim))
+      brks <- brks[is.finite(brks) & brks >= 0 & brks <= y_lim]
+      brks <- sort(unique(brks))
+      if (length(brks) == 0) brks <- c(0, y_lim)
+
+      scale_y_continuous(
+        limits = c(0, y_lim),
+        expand = expansion(mult = c(0, 0.02)),
+        breaks = brks,
+        labels = sci_lab_expr(brks),
+        minor_breaks = NULL
+      )
+    } +
+    labs(x = NULL, y = NULL) +
+    theme_classic(base_size = 6) +
+    theme(
+      legend.position = "none",
+      axis.text.y = element_blank(),
+      axis.ticks.y = element_blank(),
+      axis.text.x = element_text(size = 6),
+      axis.ticks.length = unit(1, "pt"),
+      plot.margin = margin(0, 0, 0, 3, unit = "mm")
+    )
+
+  ggsave(
+    filename = file.path(out_dir, paste0(g, "_FC_boxplot_noY_22mm.png")),
+    plot = p_noy,
+    width = 22, height = 24, units = "mm",
+    dpi = 600
+  )
+
+  ggsave(
+    filename = file.path(out_dir, paste0(g, "_FC_boxplot_noY_22mm.pdf")),
+    plot = p_noy,
+    width = 22, height = 24, units = "mm"
+  )
+}
+```
+
+# Figure 1C
+
+```{r}
+data<-read_excel("../rawdata/Quantifications/RO_QUANTIFICATION.xlsx", sheet=1)
+data_pct <- data %>%
+  dplyr::mutate(
+    pct_OTX2  = 100 * (`OTX2+`  / CELLS),
+    pct_HOXB2 = 100 * (`HOBX2+` / CELLS)
+  )
+
+# long format
+plot_df <- data_pct %>%
+  tidyr::pivot_longer(
+    cols = c(pct_OTX2, pct_HOXB2),
+    names_to = "marker",
+    values_to = "percent"
+  ) %>%
+  dplyr::mutate(
+    marker = dplyr::recode(marker,
+      pct_OTX2  = "OTX2+",
+      pct_HOXB2 = "HOXB2+"
+    )
+  )
+
+p <- ggplot(plot_df, aes(x = marker, y = percent, fill = marker)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5) +
+  geom_jitter(aes(shape = LINE), width = 0.12, height = 0, size = 0.5, alpha = 0.9) +
+  scale_fill_manual(values= c("#4EBF25", "#EC008C")) +
+  scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +
+  theme_classic(base_size = 6) +
+  theme(
+    legend.position = "none",
+    axis.title = element_blank(),
+    axis.text.y = element_text(size = 6)
+  )
+
+ggsave(
+  filename = "../Figures/Figure1C.png",
+  plot = p,
+  width = 24,
+  height = 24,
+  units = "mm",
+  dpi = 600
+)
+```
+
+# Figure 1E
+
+```{r}
+data<-read_excel("../rawdata/Quantifications/RO_QUANTIFICATION.xlsx", sheet=2)
+```
+
+```{r}
+data_pct <- data %>%
+  dplyr::mutate(
+    pct_NKX2.2  = 100 * (`NKX2.1+`  / CELLS),
+    pct_NKX6.1 = 100 * (`NKX6.1+` / CELLS)
+  )
+
+plot_df <- data_pct %>%
+  tidyr::pivot_longer(
+    cols = c(pct_NKX2.2, pct_NKX6.1),
+    names_to = "marker",
+    values_to = "percent"
+  ) %>%
+  dplyr::mutate(
+    marker = dplyr::recode(marker,
+      pct_NKX2.2  = "NKX2.2+",
+      pct_NKX6.1 = "NKX6.1+"
+    )
+  )
+
+p <- ggplot(plot_df, aes(x = marker, y = percent, fill = marker)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5) +
+  geom_jitter(aes(shape = LINE), width = 0.12, height = 0, size = 0.5, alpha = 0.9) +
+  scale_fill_manual(values= c("#4EBF25", "#EC008C")) +
+  scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +
+  theme_classic(base_size = 6) +
+  theme(
+    legend.position = "none",
+    axis.title = element_blank(),
+    #axis.text.x = element_text(size = 5, angle = 0, hjust = 0),
+    axis.text.y = element_text(size = 6)
+  )
+
+ggsave(
+  filename = "../Figures/Figure1E.png",
+  plot = p,
+  width = 24,
+  height = 24,
+  units = "mm",
+  dpi = 600
+)
+```
+
+# Figure 1G
+
+```{r}
+data<-read_excel("../rawdata/Quantifications/RO_QUANTIFICATION.xlsx", sheet=3)
+```
+
+```{r}
+data_pct <- data %>%
+  dplyr::mutate(
+    pct_FOXA2  = 100 * (`FOXA2+`  / CELLS),
+    pct_PHOX2b = 100 * (`PHOX2b+` / CELLS)
+  )
+
+plot_df <- data_pct %>%
+  tidyr::pivot_longer(
+    cols = c(pct_PHOX2b, pct_FOXA2),
+    names_to = "marker",
+    values_to = "percent"
+  ) %>%
+  dplyr::mutate(
+    marker = dplyr::recode(marker,
+      pct_PHOX2b = "PHOX2b+",
+      pct_FOXA2  = "FOXA2+"
+      
+    )
+  )
+
+plot_df <- plot_df %>%
+  dplyr::mutate(marker = factor(marker, levels = c("PHOX2b+", "FOXA2+")))
+
+
+p <- ggplot(plot_df, aes(x = marker, y = percent, fill = marker)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5) +
+  geom_jitter(aes(shape = LINE), width = 0.12, height = 0, size = 0.5, alpha = 0.9) +
+  scale_fill_manual(values= c("#4EBF25", "#EC008C")) +
+  scale_y_continuous(limits = c(0, 100), expand = c(0, 0)) +
+  theme_classic(base_size = 6) +
+  theme(
+    legend.position = "none",
+    axis.title = element_blank(),
+    #axis.text.x = element_text(size = 5, angle = 0, hjust = 0),
+    axis.text.y = element_text(size = 6)
+  )
+
+ggsave(
+  filename = "../Figures/Figure1G.png",
+  plot = p,
+  width = 24,
+  height = 24,
+  units = "mm",
+  dpi = 600
+)
+```
+
+# Figure 1I
+
+```{r}
+data<-read_excel("../rawdata/Quantifications/RO_QUANTIFICATION.xlsx", sheet=4)
+```
+
+```{r}
+data_pct <- data %>%
+  dplyr::mutate(
+    pct_5HT  = 100 * (`5-HT+`  / NEURONS),
+  )
+
+plot_df <- data_pct %>%
+  tidyr::pivot_longer(
+    cols = c(pct_5HT),
+    names_to = "marker",
+    values_to = "percent"
+  ) %>%
+  dplyr::mutate(
+    marker = dplyr::recode(marker,
+      pct_5HT  = "5-HT+"
+    )
+  )
+
+p <- ggplot(plot_df, aes(x = marker, y = percent, fill = marker)) +
+  geom_boxplot(outlier.shape = NA, width = 0.5) +
+  geom_jitter(aes(shape = LINE), width = 0.12, height = 0, size = 0.5, alpha = 0.9) +
+  scale_fill_manual(values= c("#4EBF25")) +
+  scale_y_continuous(limits = c(0, 50), expand = c(0, 0)) +
+  theme_classic(base_size = 6) +
+  theme(
+    legend.position = "none",
+    axis.title = element_blank(),
+    #axis.text.x = element_text(size = 5, angle = 0, hjust = 0),
+    axis.text.y = element_text(size = 6)
+  )
+
+ggsave(
+  filename = "../Figures/Figure1I.png",
+  plot = p,
+  width = 24,
+  height = 24,
+  units = "mm",
+  dpi = 600
+)
+```
+
+# Figure 4B
+
+```{r}
+data<-read_excel("../rawdata/Quantifications/RO_QUANTIFICATION.xlsx", sheet="FUSION")
+
+df <- data %>%
+  dplyr::mutate(
+    Condition = dplyr::recode(Condition, "5-HT" = "5HT+"),
+    Condition = dplyr::recode(Condition, "NO" = "5HT-"),
+    Batch = as.factor(BATCH),
+    Line = as.factor(LINE),
+    Picture = as.factor(PICTURE)
+  ) %>%
+  dplyr::filter(
+    !is.na(`pH3 loop / total pH3`),
+    !is.na(Condition),
+    !is.na(Batch),
+    !is.na(Line),
+    !is.na(Picture)
+  ) %>%
+  dplyr::group_by(Line, Batch, Condition, Picture) %>%
+  dplyr::summarise(
+    perc = mean(`pH3 loop / total pH3`, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    Condition = factor(Condition)
+  )
+
+
+stat.test <- df %>%
+  rstatix::pairwise_wilcox_test(
+    perc ~ Condition,
+    p.adjust.method = "BH"
+  ) %>%
+  dplyr::filter(p.adj < 0.05) %>%
+  rstatix::add_xy_position(x = "Condition") %>%
+  dplyr::mutate(
+    label = paste0("p.adj = ", signif(p.adj, 2))
+  )
+stat.test$y.position=1.8
+
+my_hex <- "#4DBBD5"
+
+p <- ggplot(df, aes(x = Condition, y = perc)) +
+  geom_boxplot(fill = my_hex, outlier.shape = NA) +
+  scale_y_continuous(limits = c(0, 2), expand = c(0, 0)) +
+  geom_jitter(
+    aes(shape = Batch),
+    width = 0.15,
+    size = 0.6,
+    stroke = 0.3
+  ) +
+  stat_pvalue_manual(
+    stat.test,
+    label = "label",
+    size = 4 / 2.845,
+    tip.length = 0.01,
+    hide.ns = TRUE
+  ) +
+  theme_classic(base_size = 6) +
+  theme(
+    legend.title = element_blank(),
+    axis.title.x = element_blank(), 
+    axis.title.y=element_blank(),
+    legend.position = "none"
+  ) +
+  ylab("pH3 loop / total pH3 (%)")
+
+ggsave(
+  filename = "../Figures/Figure4B.png",
+  plot = p,
+  width = 24, height = 28, units = "mm",
+  dpi = 600
+)
+```
+
+
+# Figure 4F
+
+```{r}
+data <- read_excel("../rawdata/Quantifications/RO_QUANTIFICATION.xlsx", sheet = "5HT-SVZ-bRG")
+
+df <- data %>%
+  dplyr::mutate(
+    Condition = dplyr::recode(
+      Condition,
+      "5-HT" = "5HT",
+      "Ket+5-HT" = "Ket+5HT"
+    ),
+    perc = (pH3 / SOX2) * 100
+  ) %>%
+  dplyr::filter(!is.na(perc), !is.na(Condition), !is.na(Batch), !is.na(number)) %>%
+  dplyr::group_by(Condition, Batch, number) %>%
+  dplyr::summarise(
+    perc = mean(perc, na.rm = TRUE),
+    .groups = "drop"
+  ) %>%
+  dplyr::mutate(
+    Batch = as.factor(Batch),
+    number = as.factor(number),
+    Condition = factor(Condition, levels = c("DMSO", "5HT", "TCB2", "Ket+5HT"))
+  ) %>%
+  dplyr::select(Condition, Batch, number, perc)
+
+stat.test <- df %>%
+  rstatix::pairwise_wilcox_test(
+    perc ~ Condition,
+    p.adjust.method = "BH"
+  ) %>%
+  dplyr::filter(p.adj < 0.05) %>%
+  rstatix::add_xy_position(x = "Condition", step.increase = 0.2)
+
+stat.test$y.position<-c(17, 19.5, 21.5, 23.7)
+stat.test <- stat.test %>%
+  dplyr::mutate(
+    label = paste0("p.adj = ", signif(p.adj, 2))
+  )
+
+my_hex <- "#4DBBD5"
+
+p <- ggplot(df, aes(x = Condition, y = perc)) +
+  geom_boxplot(fill = my_hex, outlier.shape = NA) +
+  geom_jitter(
+    aes(shape = Batch),
+    width = 0.15,
+    size = 0.5,
+    stroke = 0.3
+  ) +
+  stat_pvalue_manual(
+    stat.test,
+    label = "label",
+    size = 4 / 2.845,
+    tip.length = 0.01
+  ) +
+  theme_classic(base_size = 6) +
+  theme(
+    legend.title = element_blank()
+  ) +
+  ylab("% pH3 / SOX2")
+
+p_out <- p +
+  coord_cartesian(ylim = c(0, 25), clip = "off") +
+  scale_y_continuous(limits = c(0, 25), expand = c(0, 0)) +
+  scale_x_discrete(expand = c(0, 0)) +
+  labs(x = NULL, y = NULL) +
+  theme_classic(base_size = 6) +
+  theme(
+    legend.position = "none",
+    axis.line.x = element_line(),
+    axis.line.y = element_line()
+  )
+
+ggsave(
+  filename = "../Figures/Figure4F.png",
+  plot = p_out,
+  width = 35, height = 26, units = "mm",
+  dpi = 600
+)
+```
+
+# Figure 4H
+
+```{r}
+data <- read_excel("../rawdata/Quantifications/RO_QUANTIFICATION.xlsx", sheet = "5HT-SVZ-IP")
+
+df_org <- data %>%
+  dplyr::mutate(
+    Condition = dplyr::recode(Condition, "5-HT" = "5HT"),
+    Condition = factor(Condition, levels = c("DMSO", "5HT")),
+    Batch = as.factor(Batch),
+    PIC = as.factor(IMAGE)
+  ) %>%
+  dplyr::filter(
+    Condition %in% c("DMSO", "5HT"),
+    !is.na(TBR2),
+    !is.na(pH3),
+    !is.na(Batch),
+    !is.na(PIC)
+  ) %>%
+  dplyr::group_by(Batch, PIC, Condition) %>%
+  dplyr::summarise(
+    Nuclei = sum(TBR2, na.rm = TRUE),
+    pH3 = sum(pH3, na.rm = TRUE),
+    perc = 100 * pH3 / Nuclei,
+    .groups = "drop"
+  )
+
+df_org %>%
+  dplyr::count(Batch, PIC, Condition) %>%
+  dplyr::filter(n > 1)
+
+stat.test <- df_org %>%
+  rstatix::pairwise_wilcox_test(
+    perc ~ Condition,
+    paired = FALSE,
+    p.adjust.method = "BH"
+  ) %>%
+  dplyr::filter(p.adj < 0.05) %>%
+  rstatix::add_xy_position(x = "Condition") %>%
+  dplyr::mutate(label = paste0("p.adj = ", signif(p.adj, 2)))
+
+my_hex <- "#4DBBD5"
+
+p <- ggplot(df_org, aes(x = Condition, y = perc)) +
+  geom_boxplot(fill = my_hex, outlier.shape = NA) +
+  geom_jitter(
+    aes(shape = Batch),
+    width = 0.15,
+    size = 0.5,
+    stroke = 0.3
+  ) +
+  stat_pvalue_manual(
+    stat.test,
+    label = "label",
+    size = 4 / 2.845,
+    tip.length = 0.01,
+    hide.ns = TRUE
+  ) +
+  coord_cartesian(ylim = c(0, 3), clip = "off") +
+  scale_y_continuous(limits = c(0, 3), expand = c(0, 0)) +
+  scale_x_discrete(expand = c(0, 0)) +
+  labs(x = NULL, y = "% pH3 / TBR2") +
+  theme_classic(base_size = 6) +
+  theme(
+    legend.title = element_blank(),
+    legend.position = "none",
+    axis.line.x = element_line(),
+    axis.line.y = element_line()
+  )
+
+ggsave(
+  filename = "../Figures/Figure4H.png",
+  plot = p,
+  width = 35, height = 26, units = "mm",
+  dpi = 600,
+  bg = "white"
+)
+```
+
+```{r}
+sessionInfo()
+```

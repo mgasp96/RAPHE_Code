@@ -1,0 +1,31 @@
+# macOS / RStudio
+.DS_Store
+._*
+.Rproj.user/
+.Rhistory
+.RData
+*.Rproj
+
+# Python
+__pycache__/
+*.egg-info/
+.ipynb_checkpoints/
+
+# Large data and outputs (sequencing data: GHGA; source data: provided with the paper)
+Sequencing/data/*
+!Sequencing/data/.gitkeep
+Sequencing/Figures/*
+!Sequencing/Figures/.gitkeep
+Sequencing/rawdata/*
+!Sequencing/rawdata/Quantifications/
+sDarken/input_data/*
+!sDarken/input_data/.gitkeep
+sDarken/figures/*
+!sDarken/figures/.gitkeep
+*.rds
+*.h5ad
+*.mtx
+*.mtx.gz
+*.cloupe
+*.tar.gz
+*.html

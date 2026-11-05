@@ -1,0 +1,239 @@
+---
+title: "001_QC"
+author: "Matteo Gasparotto & Raquel Pérez Fernández"
+date: "2025/02/22"
+description: ""
+output: 
+  bookdown::html_document2:
+    code_folding: hide
+    fig_caption: true
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: yes
+link-citations: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, tidy.opts=list(width.cutoff=80),tidy=TRUE, fig.asp=0.5, fig.width=12, warning = FALSE, message=FALSE)
+```
+```{r, warning=FALSE, message=FALSE}
+source("../helpers/Set_environment.R")
+source("../helpers/Set_functions.R")
+mem.maxVSize(16384*4) 
+set.seed(42)
+options(future.globals.maxSize = 10000 * 1024^3)
+options(mc.cores = parallel::detectCores() - 1)
+
+library(ggrepel)
+```
+
+```{r}
+create_df <- function(raw_data_dir = "./rawdata") {
+  folders <- list.dirs(raw_data_dir, full.names = TRUE, recursive = FALSE)
+  seurat_list <- list()
+  for (folder in folders) {
+    matrix_path <- file.path(folder, "filtered_feature_bc_matrix")
+    if (!dir.exists(matrix_path)) next
+    message("Reading: ", matrix_path)
+    data <- Read10X(data.dir = matrix_path)
+    seurat_list[[basename(folder)]] <- CreateSeuratObject(counts = data, project = basename(folder))
+  }
+  seurat_list
+}
+seurat_objects <- create_df("../rawdata")
+```
+
+```{r}
+for(obj_name in names(seurat_objects)) {
+  seurat_obj <- seurat_objects[[obj_name]]
+  seurat_obj <- PercentageFeatureSet(seurat_obj, pattern = "^MT-", col.name = "percent.mt", assay = "RNA")
+  seurat_obj <- PercentageFeatureSet(seurat_obj, pattern = "^RP[SL]", col.name = "percent.ribo", assay = "RNA")
+  
+  assign(obj_name, seurat_obj, envir = .GlobalEnv)
+  
+  vln_plot <- QC_VlnPlot(seurat_obj)
+  hist_plot <- QC_HistPlot(seurat_obj)
+  scatter_plot <- QC_ScatterPlots(seurat_obj, low_nFeature = 500)
+  
+  assign(paste0("vln_", obj_name), vln_plot, envir = .GlobalEnv)
+  assign(paste0("hist_", obj_name), hist_plot, envir = .GlobalEnv)
+  assign(paste0("scatter_", obj_name), scatter_plot, envir = .GlobalEnv)
+}
+```
+
+# Filtering
+
+```{r}
+.mad_bounds <- function(x, nmads = 3) {
+  m  <- median(x, na.rm = TRUE)
+  md <- mad(x, constant = 1, na.rm = TRUE)
+  c(lower = m - nmads * md, upper = m + nmads * md)
+}
+```
+
+```{r}
+obj<-c("CO_CTRL", "CO_FUSED", "RO_CTRL", "RO_FUSED")
+
+ProcessAndIntegrate_MADS <- function(object_names,
+                                     mt_threshold = 5,    
+                                     nmads = 3,            
+                                     nfeatures = 2000,
+                                     dims = 1:30,
+                                     assay = "RNA",
+                                     verbose = FALSE) {
+
+  seurat_list <- mget(object_names, envir = .GlobalEnv)
+
+  processed_list <- lapply(seurat_list, function(obj) {
+    log_nCount   <- log10(obj$nCount_RNA + 1)
+    log_nFeature <- log10(obj$nFeature_RNA + 1)
+
+    b_counts   <- .mad_bounds(log_nCount,   nmads = nmads)
+    b_features <- .mad_bounds(log_nFeature, nmads = nmads)
+
+    keep <- (log_nCount   >= b_counts["lower"]   & log_nCount   <= b_counts["upper"]) &
+            (log_nFeature >= b_features["lower"] & log_nFeature <= b_features["upper"]) &
+            (obj$percent.mt < mt_threshold)
+
+    obj <- subset(obj, cells = colnames(obj)[keep])
+    
+    DefaultAssay(obj) <- assay
+    obj <- NormalizeData(obj, verbose = verbose)
+    obj <- FindVariableFeatures(obj, selection.method = "vst", nfeatures = nfeatures, verbose = verbose)
+    obj
+  })
+
+  anchors    <- FindIntegrationAnchors(object.list = processed_list, dims = dims)
+  integrated <- IntegrateData(anchorset = anchors, dims = dims)
+  integrated
+}
+
+df<-ProcessAndIntegrate_MADS(obj)
+
+# df <- JoinLayers(df, layers = grep("^counts", Layers(df), value = TRUE), new.assay = "RNA")
+# df <- JoinLayers(df, layers = grep("^data", Layers(df), value = TRUE), new.assay = "normalized")
+# df <- JoinLayers(df, layers = grep("^scale.data", Layers(df), value = TRUE), new.assay = "scaled")
+```
+
+```{r}
+DefaultAssay(df) <- "integrated"
+df <- ScaleData(df, verbose = FALSE)
+df <- RunPCA(df, npcs = 30, verbose = FALSE)
+p1<-ElbowPlot(df, ndims=50)
+p1 <- p1 + geom_vline(xintercept = 20, linetype = "dashed", color = "#025e8d", size = 1)
+p1
+```
+
+```{r}
+stdev<-df[["pca"]]@stdev
+var_explained<-(stdev^2/sum(stdev^2))*100
+
+elbow_df <- data.frame(
+  PC = 1:length(var_explained),
+  percent_explained = var_explained
+)
+elbow_df$cum_explained <- cumsum(elbow_df$percent_explained)
+
+ggplot(elbow_df, aes(x = PC, y = percent_explained)) +
+  geom_point() +
+  geom_line() +
+  geom_text_repel(aes(label = round(cum_explained, 1)), size = 3) +
+  geom_vline(xintercept = 12, linetype = "dashed", color = "#025e8d", size = 1) +
+  labs(y = "Percentage of Explained Variance", x = "Principal Component") +
+  theme_minimal()
+
+```
+
+```{r}
+df <- RunUMAP(df, reduction = "pca", dims = 1:15)
+DimPlot(df, reduction = "umap", split.by="orig.ident") & NoAxes()
+```
+
+```{r, fig.asp=1}
+DimPlot(df, reduction = "umap", group.by="orig.ident") & NoAxes()
+```
+
+Seurat integration is too strict. Export the object and perform scvi integration
+
+```{r}
+df$sample <- df$orig.ident
+df <- RenameCells(df, new.names = paste0(df$sample, "_", colnames(df)))
+```
+
+# Export 
+
+```{r}
+DefaultAssay(df) <- "RNA"
+df[["RNA"]] <- JoinLayers(df[["RNA"]])
+library(SeuratObject)
+library(Matrix)
+out<-"../data/001_Integrated_export"
+dir.create(out, recursive = TRUE, showWarnings = FALSE)
+
+write_assay <- function(df, assay, outdir){
+  dir.create(outdir, showWarnings = FALSE)
+  a <- df[[assay]]
+  C <- SeuratObject::LayerData(a, layer = "counts")
+  D <- SeuratObject::LayerData(a, layer = "data")
+
+  if (!inherits(C, "dgCMatrix")) C <- Matrix(C, sparse = TRUE)
+  if (!inherits(D, "dgCMatrix")) D <- Matrix(D, sparse = TRUE)
+
+  Matrix::writeMM(C, file.path(outdir, "matrix_counts.mtx"))
+  Matrix::writeMM(D, file.path(outdir, "matrix_data.mtx"))
+
+  write.table(data.frame(feature = rownames(D)),
+              file.path(outdir, "features.tsv"),
+              sep = "\t", quote = FALSE, row.names = FALSE, col.names = TRUE)
+  write.table(data.frame(barcode = colnames(D)),
+              file.path(outdir, "barcodes.tsv"),
+              sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+
+  mf <- a@meta.data
+  mf$feature <- rownames(mf)
+  mf <- mf[, c("feature", setdiff(colnames(mf), "feature"))]
+  write.table(mf, file.path(outdir, "var.csv"), sep = ",", quote = TRUE, row.names = FALSE)
+}
+
+write_assay(df, "RNA",  file.path(out, "rna"))
+
+write.table(df@meta.data, file.path(out, "obs.csv"),
+            sep = ",", quote = TRUE, row.names = TRUE, col.names = NA)
+
+if (length(Reductions(df))) {
+  rdir <- file.path(out, "reductions"); dir.create(rdir, showWarnings = FALSE)
+  for (nm in Reductions(df)) {
+    write.table(Embeddings(df, nm), file.path(rdir, paste0(nm, ".csv")),
+                sep = ",", quote = FALSE, col.names = NA)
+  }
+}
+
+if (length(df@graphs)) {
+  gdir <- file.path(out, "graphs"); dir.create(gdir, showWarnings = FALSE)
+  for (nm in names(df@graphs)) {
+    G <- df@graphs[[nm]]
+    if (!inherits(G, "dgCMatrix")) G <- Matrix(G, sparse = TRUE)
+    Matrix::writeMM(G, file.path(gdir, paste0(nm, ".mtx")))
+    write.table(data.frame(barcode = colnames(G)),
+                file.path(gdir, paste0(nm, "_nodes.tsv")),
+                sep = "\t", quote = FALSE, row.names = FALSE, col.names = FALSE)
+  }
+}
+
+cat("Exported to: ", normalizePath(out, mustWork = FALSE), "\n")
+```
+
+```{r}
+saveRDS(df, "../data/001_Integrated.rds")
+```
+
+```{r}
+sessionInfo()
+```
+
+
+
+

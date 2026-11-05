@@ -1,0 +1,1535 @@
+---
+title: "003_Annotation_analysis"
+author: "Raquel Pérez Fernández & Matteo Gasparotto"
+date: "2025/03/16"
+description: "Set pipeline for cluster annotation"
+output: 
+  bookdown::html_document2:
+    code_folding: hide
+    fig_caption: true
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: yes
+link-citations: yes
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,tidy=TRUE, fig.asp=0.5, fig.width=12, warning = TRUE, message=TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+source("../helpers/Set_environment.R")
+source("../helpers/Set_functions.R")
+mem.maxVSize(16384*2) 
+set.seed(42)
+library(DT)
+library(purrr)
+library(forcats)
+library(stringr)
+library(tricycle)
+library(circlize)
+library(ggalluvial)
+library(CellChat)
+library(NMF)
+library(ComplexHeatmap)
+library(openxlsx)
+library(tidyr)
+library(dplyr)
+
+RPF_palette_1 <- c (
+  "Telen_NPC" = "#93B8C5",
+  "Telen_IPC" = "#9EE4FF",
+  "Telen_NBL" = "#009DDB",
+  "TBR1+_Neurons" = "#0B6596",
+  "SATB2+_Neurons" = "#00264D",
+  "Ventral_NPC" = "#78A56A",
+  "Ventral_GABA+_Neurons" = "#354B2D", 
+  "Midbrain_NPC" = "#E9D8A6", 
+  "Subcortex_Neurons" = "#DAB667",
+  "Hindbrain_NPC" = "#F09A38",
+  "Hindbrain_glia" = "#BB3E03",
+  "Serotonin_Neurons" = "#9B2226",
+  "Brain_Fibroblasts" = "#602F07",
+  "Unknown" ="#B9B4D4") ## Legacy
+
+RPF_palette_2 <- c (
+  "Telen_NPC" = "#93B8C5",
+  "Telen_IPC" = "#9EE4FF",
+  "Telen_NBL" = "#009DDB",
+  "TBR1+_Neurons" = "#0B6596",
+  "SATB2+_Neurons" = "#00264D",
+  "CyP" = "#78A56A", 
+  "Hindbrain_NPC" = "#354B2D", 
+  "Midbrain_NPC" = "#E9D8A6", 
+  "Serotonin_Neurons" = "#DAB667", 
+  "Ventral_GABA+_Neurons" = "#F09A38",
+  "Subcortex_Neurons" = "#BB3E03",
+  "Hindbrain_glia" = "#9B2226",
+  "Brain_Fibroblasts" = "#602F07",
+  "Unknown" ="#B9B4D4")
+```
+
+```{r}
+df<-readRDS("../data/001_Integrated.rds")
+DefaultAssay(df)<-"RNA"
+```
+
+```{r}
+meta<-read.csv("../data/002_Integrated_export/rna_mtx/metadata.csv")
+meta_slim<-read.csv("../data/002_Integrated_export/metadata_slim_celltypist.csv")
+```
+
+```{r}
+meta <- meta %>%
+  rename(barcode = X) %>%
+  dplyr::select(-celltypist_cell_label, -celltypist_conf_score) %>%
+  left_join(
+    meta_slim %>% dplyr::select(barcode, celltype, celltypist_cell_label),
+    by = "barcode"
+  )
+
+rownames(meta)<-meta$barcode
+meta<-meta[colnames(df), , drop=FALSE]
+df <- AddMetaData(df, metadata = meta)
+
+um<-read.csv("../data/002_Integrated_export/rna_mtx/umap_HVG.csv", row.names=1)
+um<-as.matrix(um[Cells(df), ,drop=FALSE])
+df[["umap_hvg"]]<-CreateDimReducObject(embeddings=um, key="UMAPHVG_", assay="RNA")
+```
+
+```{r}
+df <- subset(df, subset = celltype != "Doublets")
+map <- c(
+  "Unknown_1" = "Midbrain_NPC",
+  "Unknown_2" = "Unknown",
+  "Telen_Neuroblast" = "Telen_NBL", 
+  "Cortical_Telen_N_Excitatory_SATB2"="SATB2+_Neurons",
+  "Cortical_Telen_N_Excitatory_TBR1"="TBR1+_Neurons",
+  "Anterior_N_GABA" = "Ventral_GABA+_Neurons", 
+  "Anterior_NPC"="CyP", 
+  "Hindbrain_NPC_glia"="Hindbrain_glia", 
+  "Hindbrain_N"="Subcortex_Neurons", 
+  "Serotonin_N"="Serotonin_Neurons"
+)
+
+df$celltype <- dplyr::recode(df$celltype, !!!map)
+
+celltype_labels<-c("Telen_NPC", "Telen_IPC", "Telen_NBL", "TBR1+_Neurons",  "SATB2+_Neurons",
+             "CyP", "Ventral_GABA+_Neurons", "Midbrain_NPC", "Subcortex_Neurons", "Hindbrain_NPC", "Hindbrain_glia", "Serotonin_Neurons",  "Brain_Fibroblasts", "Unknown")
+df$celltype <- factor(df$celltype, levels = c( "Telen_NPC", "Telen_IPC", "Telen_NBL", "TBR1+_Neurons","SATB2+_Neurons", "CyP", "Hindbrain_NPC", "Midbrain_NPC", "Serotonin_Neurons", "Ventral_GABA+_Neurons", "Subcortex_Neurons","Hindbrain_glia", "Brain_Fibroblasts","Unknown" ))
+
+Idents(df) <- "celltype"
+
+df$condition <- dplyr::case_when(
+  df$sample %in% c("CO_CTRL") ~ "CO",
+  df$sample %in% c("RO_CTRL") ~ "RO",
+  df$sample %in% c("CO_FUSED", "RO_FUSED") ~ "FUSED"
+)
+
+df$condition <- factor(df$condition, levels = c("CO", "RO", "FUSED"))
+
+```
+
+```{r}
+#saveRDS(df, "../data/PerezFernandez_2026_rev.rds")
+```
+
+```{r}
+p4<-DimPlot(df, reduction="umap_hvg", group.by="celltype", cols=RPF_palette_2) & NoAxes()
+p5<-DimPlot(df, reduction="umap_hvg", group.by="celltype", cols=RPF_palette_2) & NoAxes() & NoLegend()
+p4
+```
+
+# Figure 2D
+
+```{r}
+p4<-DimPlot(df, reduction="umap_hvg", group.by="celltypist_cell_label") & NoAxes() & ggtitle(NULL)
+p4
+```
+
+```{r}
+p <- DimPlot(df, reduction = "umap_hvg", group.by = "celltypist_cell_label", pt.size = 0.1)  & NoAxes() & ggtitle(NULL) & NoLegend()
+ggsave(
+  filename = "../Figures/Figure_2D.png",
+  plot     = p,
+  width    = 45*3,
+  height   = 45*3,
+  units    = "mm",
+  dpi      = 600
+)
+```
+
+# Figure 2E
+
+
+```{r}
+p <- DimPlot(df, reduction = "umap_hvg", group.by = "celltype", pt.size = 0.1, cols=RPF_palette_2)  & NoAxes() & ggtitle(NULL) & NoLegend()
+ggsave(
+  filename = "../Figures/Figure_2E.png",
+  plot     = p,
+  width    = 45*3,
+  height   = 45*3,
+  units    = "mm",
+  dpi      = 600
+)
+```
+
+```{r}
+p<-DimPlot(df, reduction = "umap_hvg", group.by = "celltype", pt.size = 0.1, split.by="condition", cols=RPF_palette_2)  & NoAxes() & ggtitle(NULL) & NoLegend()
+
+ggsave(
+  filename = "../Figures/Figure_2Eb.png",
+  plot     = p,
+  width    = 45*3*3,
+  height   = 45*3,
+  units    = "mm",
+  dpi      = 600
+)
+```
+
+# Figure 2F
+
+```{r, fig.width=10, fig.heigth=2}
+toplot <- unique(c("MKI67", "NES", "SOX2", "PAX6", "FOXG1", "EMX1", "EOMES", "DCX", "RBFOX3", "STMN2", "SYP", "TBR1", "SATB2", "DLG4","SLC17A6", "SLC17A7", "NKX2-1",  "GAD1", "GAD2", "SHH", "FOXA2", "LMX1B", "TPH2", "FEV", "DDC", "SLC6A4", "OTX2", "LMX1A", "EN1", "TH", "GFAP", "AQP4", "COL6A3", "COL1A2"))
+
+toplot <- unique(toplot)
+
+p11 <- DotPlot(df, features = toplot, cols = diverging_palette(5))
+filtered_data <- p11$data %>%
+  group_by(features.plot) %>%
+  filter(any(pct.exp >= 0)) %>%
+  ungroup()
+expression_matrix <- filtered_data %>%
+  dplyr::select(features.plot, id, avg.exp.scaled) %>%
+  tidyr::pivot_wider(names_from = id, values_from = avg.exp.scaled, values_fill = 0) %>%
+  tibble::column_to_rownames("features.plot")
+gene_order <- hclust(dist(expression_matrix))$order
+sorted_genes <- rownames(expression_matrix)[gene_order]
+p11 <- DotPlot(df, features = toplot, cols = diverging_palette(5)) +
+  scale_color_gradientn(
+    colors = diverging_palette_4(5), 
+    limits = c(-max(abs(filtered_data$avg.exp.scaled)), max(abs(filtered_data$avg.exp.scaled)))
+  ) +
+  #coord_flip() +
+  #labs(title = "Filtered DotPlot: Genes clustered by similarity") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1,size=8)) +
+  theme(axis.text.x=element_text(angle=45, hjust=1, size=8))
+
+p11
+```
+
+```{r}
+Dotplot <- p11 +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 0),
+    axis.ticks = element_blank(),
+    axis.line  = element_blank(),
+    plot.margin = margin(2,2, 2, 3, unit = "pt")
+  ) +
+  scale_size(range = c(0, 2.5))
+
+ggsave(
+  filename = "../Figures/Figure_2F.png",
+  plot     = Dotplot,
+  width    = 90,
+  height   = 50,
+  units    = "mm",
+  dpi      = 600
+)
+
+```
+
+# Figure 2G
+
+```{r, fig.width=5, fig.asp=2}
+cell_counts <- df@meta.data %>%
+  group_by(condition, celltype) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(condition) %>%
+  mutate(percentage = n / sum(n) * 100) %>%
+  ungroup()
+
+per <- ggplot(cell_counts, 
+              aes(x = condition, 
+                  y = percentage, 
+                  fill = fct_rev(celltype))) +
+  geom_bar(stat = "identity") +
+  scale_fill_manual(
+    values = RPF_palette_2,
+    guide  = guide_legend(reverse = TRUE)
+  ) +
+  labs(
+    x    = "Condition", 
+    y    = "Percentage of Cells", 
+    fill = "Cell Type"
+  ) +
+  theme_minimal() +
+  theme(
+    legend.position  = "none",
+    axis.title.x     = element_text(size = 0),
+    axis.title.y     = element_text(size = 0),
+    axis.text.x      = element_text(size = 0, angle = 45, hjust = 1),
+    axis.text.y      = element_text(size = 0),
+    strip.text       = element_text(size = 0),
+    plot.title       = element_text(size = 0, face = "bold"),
+    plot.margin = margin(0,0, 0, 0, unit = "pt")
+  )
+per
+
+# ggsave(
+#   filename = "../Figures/Figure_2G.png",
+#   plot     = per,
+#   width    = 25,
+#   height   = 50,
+#   units    = "mm",
+#   dpi      = 600
+# )
+
+```
+
+```{r}
+cell_table <- df@meta.data %>%
+  dplyr::group_by(condition, celltype) %>%
+  dplyr::summarise(n = dplyr::n(), .groups = "drop") %>%
+  dplyr::group_by(condition) %>%
+  dplyr::mutate(percentage = n / sum(n) * 100) %>%
+  dplyr::ungroup() %>%
+  tidyr::pivot_wider(
+    id_cols = celltype,
+    names_from = condition,
+    values_from = percentage,
+    values_fill = 0
+  )
+```
+
+# Figure 3A
+
+```{r}
+obj <- subset(
+  df,
+  subset = condition %in% c("CO", "FUSED") & celltype == "Telen_NPC"
+)
+
+obj<-Runtricycle(obj, assay="RNA", gname.type="SYMBOL", species="human")
+plot_ccposition_den(
+  theta.v     = obj$tricyclePosition,
+  color_var.v = obj$condition,          
+  color_name  = "condition",
+  bw          = 10,
+  fig.title   = "Kernel density of θ"
+) + theme_bw(base_size = 6)
+
+p <- plot_ccposition_den(
+  theta.v     = obj$tricyclePosition,
+  color_var.v = obj$condition,
+  color_name  = "condition",
+  bw          = 10,
+  fig.title   = NULL
+) +
+  theme_bw(base_size = 6) +
+  theme(
+    axis.title = element_blank(),     # remove axis titles
+    axis.text  = element_blank(),     # remove axis tick labels
+    axis.ticks = element_blank(),     # remove ticks
+    legend.position = "none",         # remove legend
+    plot.title = element_blank(),     # remove title
+    panel.grid = element_blank()      # optional: cleaner look
+  ) +
+  scale_x_continuous(expand = c(0, 0)) +  # no padding
+  scale_y_continuous(expand = c(0, 0))
+p$layers <- p$layers[-3]
+ggsave(
+  filename = "../Figures/Figure3A.png",
+  plot = p,
+  width = 40,
+  height = 50,
+  units = "mm",
+  dpi = 600
+)
+```
+
+# Figure 3B
+
+```{r}
+df$class<-paste(df$condition, df$celltype, sep="_")
+Idents(df)<-"class"
+markers<-FindMarkers(df, ident.1="FUSED_Telen_NPC", ident.2="CO_Telen_NPC")
+
+markers <- markers %>%
+  filter(p_val_adj < 0.05) %>%
+  arrange(desc(avg_log2FC)) %>%
+  tibble::rownames_to_column("gene") %>%
+  filter(!grepl("^(RPL|RPS)", gene))
+
+entrez <- bitr(markers$gene, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+
+BP <- enrichGO(
+  gene = entrez$ENTREZID,     
+  OrgDb = org.Hs.eg.db,           
+  keyType = "ENTREZID",           
+  ont = "BP",                      
+  pAdjustMethod = "BH",           
+  pvalueCutoff = 0.05,             
+  qvalueCutoff = 0.05,            
+  readable = TRUE                 
+)
+
+go<-as.data.frame(BP@result) %>% filter(p.adjust < 0.05)
+plot_GO_barplot_v2(BP, " ", "Biological Process", rna_palette, n_terms = 10, sort.by = "p.adjust", scale.by="FoldEnrichment")
+
+p <- plot_GO_barplot_v2(
+  go,
+  comparison = "",
+  ontology   = "",
+  color_palette = rna_palette,
+  n_terms = 10, 
+  sort.by="p.adjust", 
+  scale.by="FoldEnrichment"
+)
+
+p_small <- p +
+  theme_minimal(base_size = 6) +
+  theme(
+    text              = element_text(size = 6),
+    axis.text.x       = element_text(size = 6),
+    axis.text.y       = element_blank(),
+    axis.title.x      = element_blank(),     
+    axis.title.y      = element_blank(),
+    plot.title        = element_blank(),     
+    legend.position   = "none",               
+    panel.grid        = element_blank(),
+    plot.margin       = unit(c(0,0,0,0), "mm")
+  )
+
+ggsave(
+  filename = "../Figures/Figure_3B.png",
+  plot     = p_small,
+  width    = 42,
+  height   = 55,
+  units    = "mm",
+  dpi      = 600,
+  bg       = "transparent"
+)
+
+write.csv(go, "../Supplementary_Tables/BP_Fused_Telen_NPC_vs_CO_Telen_NPC.csv")
+write.csv(markers, "../Supplementary_Tables/DEG_Fused_Telen_NPC_vs_CO_Telen_NPC.csv")
+
+
+go_genes_npc <- markers %>%
+  dplyr::select(gene, avg_log2FC)
+
+terms_to_show_npc <- go %>%
+  filter(ID %in% c("GO:0010975", "GO:0006888", "GO:0006983", "GO:0007409", "GO:0061351"))
+
+edges_npc <- terms_to_show_npc %>%
+  transmute(
+    term  = Description,
+    genes = strsplit(geneID, "/")
+  ) %>%
+  tidyr::unnest(genes) %>%
+  left_join(go_genes_npc, by = c("genes" = "gene")) %>%
+  group_by(term) %>%
+  arrange(desc(abs(avg_log2FC)), .by_group = TRUE) %>%
+  slice_head(n = 5) %>%
+  ungroup() %>%
+  dplyr::select(term, genes)
+```
+
+# Supplementary figure 3A
+
+```{r}
+Idents(df)<-"class"
+markers<-FindMarkers(df, ident.1="FUSED_TBR1+_Neurons", ident.2="CO_TBR1+_Neurons")
+
+markers <- markers %>%
+  filter(p_val_adj < 0.05) %>%
+  arrange(desc(avg_log2FC)) %>%
+  tibble::rownames_to_column("gene") %>%
+  filter(!grepl("^(RPL|RPS)", gene))
+
+entrez <- bitr(markers$gene, fromType = "SYMBOL", toType = "ENTREZID", OrgDb = org.Hs.eg.db)
+
+
+BP <- enrichGO(
+  gene = entrez$ENTREZID,     
+  OrgDb = org.Hs.eg.db,           
+  keyType = "ENTREZID",           
+  ont = "BP",                      
+  pAdjustMethod = "BH",           
+  pvalueCutoff = 0.05,             
+  qvalueCutoff = 0.05,            
+  readable = TRUE                 
+)
+
+go<-as.data.frame(BP@result) %>% filter(p.adjust < 0.05)
+plot_GO_barplot_v2(BP, " ", "Biological Process", rna_palette, n_terms = 10, sort.by = "p.adjust", scale.by="FoldEnrichment")
+
+p <- plot_GO_barplot_v2(
+  go,
+  comparison = "",
+  ontology   = "",
+  color_palette = rna_palette,
+  n_terms = 10, 
+  sort.by="p.adjust", 
+  scale.by="FoldEnrichment"
+)
+
+p_small <- p +
+  theme_minimal(base_size = 6) +
+  theme(
+    text              = element_text(size = 6),
+    axis.text.x       = element_text(size = 6),
+    axis.text.y       = element_blank(),
+    axis.title.x      = element_blank(),     
+    axis.title.y      = element_blank(),
+    plot.title        = element_blank(),     
+    legend.position   = "none",               
+    panel.grid        = element_blank(),
+    plot.margin       = unit(c(0,0,0,0), "mm")
+  )
+
+ggsave(
+  filename = "../Figures/Supp_Fig_3A.png",
+  plot     = p_small,
+  width    = 41,
+  height   = 55,
+  units    = "mm",
+  dpi      = 600,
+  bg       = "transparent"
+)
+
+write.csv(go, "../Supplementary_Tables/BP_Fused_TBR1+_Neurons_vs_CO_TBR1+_Neurons.csv")
+write.csv(markers, "../Supplementary_Tables/DEG_Fused_TBR1+_Neurons_vs_CO_TBR1+_Neurons.csv")
+
+## Chordplot stuff
+
+go_genes_tbr1 <- markers %>%
+  dplyr::select(gene, avg_log2FC)
+
+terms_to_show_tbr1 <- go %>%
+  filter(ID %in% c("GO:0010975", "GO:0007409", "GO:0016358", "GO:0050803", "GO:0099173"))
+
+edges_tbr1 <- terms_to_show_tbr1 %>%
+  transmute(
+    term  = Description,
+    genes = strsplit(geneID, "/")
+  ) %>%
+  tidyr::unnest(genes) %>%
+  left_join(go_genes_tbr1, by = c("genes" = "gene")) %>%
+  group_by(term) %>%
+  arrange(desc(abs(avg_log2FC)), .by_group = TRUE) %>%
+  slice_head(n = 5) %>%
+  ungroup() %>%
+  dplyr::select(term, genes)
+
+```
+
+# Figures 3C & 3D
+
+```{r}
+all_terms_global <- unique(c(edges_npc$term, edges_tbr1$term))
+
+term_col_global <- c(
+  "axonogenesis" = "#8fd7d7",
+  "dendrite development" = "#00b0be",
+  "endoplasmic reticulum to Golgi vesicle-mediated transport" = "#ff8ca1",
+  "ER overload response" = "#C8A2C8",
+  "neural precursor cell proliferation" = "#BDD373",
+  "postsynapse organization" = "#98C127",
+  "regulation of neuron projection development" = "#FFCD8E", 
+  "regulation of synapse structure or activity"="#FF9D3A"
+)
+
+missing_terms <- setdiff(all_terms_global, names(term_col_global))
+if (length(missing_terms) > 0) {
+  warning("Missing colors for: ", paste(missing_terms, collapse = ", "))
+  term_col_global[missing_terms] <- "grey80"
+}
+
+term_col_global <- term_col_global[unique(c(names(term_col_global), all_terms_global))]
+term_col_global <- term_col_global[!is.na(names(term_col_global))]
+
+plot_go_chord <- function(edges, go_genes, term_col_global, file = NULL,
+                          width_mm = 40, height_mm = 40, res = 600) {
+  
+  all_terms <- unique(edges$term)
+  all_genes <- unique(edges$genes)
+  
+  gene_meta <- go_genes %>%
+    filter(gene %in% all_genes)
+  
+  lim <- max(abs(gene_meta$avg_log2FC), na.rm = TRUE)
+  
+  col_fun <- circlize::colorRamp2(
+    seq(-lim, lim, length.out = 5),
+    diverging_palette(5)
+  )
+  
+  gene_col <- setNames(
+    col_fun(gene_meta$avg_log2FC),
+    gene_meta$gene
+  )
+  
+  missing_genes <- setdiff(all_genes, names(gene_col))
+  if (length(missing_genes) > 0) {
+    gene_col[missing_genes] <- "grey80"
+  }
+  
+  term_col <- term_col_global[all_terms]
+  names(term_col) <- all_terms
+  
+  grid.col <- c(term_col, gene_col)
+  sector_order <- c(all_terms, all_genes)
+  
+  draw_fun <- function() {
+    circos.clear()
+    circos.par(
+      start.degree = 90,
+      gap.after = c(
+        rep(1, length(all_terms) - 1), 6,
+        rep(1, length(all_genes) - 1), 6
+      ),
+      track.margin = c(0, 0),
+      cell.padding = c(0, 20, 0, 0),
+      canvas.xlim = c(-1.5, 1.5),
+      canvas.ylim = c(-1.5, 1.5),
+      points.overflow.warning = FALSE
+    )
+    
+    chordDiagram(
+      x = edges,
+      order = sector_order,
+      grid.col = grid.col,
+      transparency = 0.2,
+      annotationTrack = "grid",
+      annotationTrackHeight = 0.03,
+      directional = 0,
+      link.sort = FALSE,
+      link.lwd = 0.2,
+      link.border = NA,
+      link.arr.type = "none"
+    )
+    
+    circos.trackPlotRegion(
+      track.index = 1,
+      panel.fun = function(x, y) {
+        sector.name <- get.cell.meta.data("sector.index")
+        if (sector.name %in% all_genes) {
+          circos.text(
+            x = get.cell.meta.data("xcenter"),
+            y = get.cell.meta.data("ylim")[2] + 0.05,
+            labels = sector.name,
+            facing = "clockwise",
+            niceFacing = TRUE,
+            adj = c(0, 0.5),
+            cex = 1
+          )
+        }
+      },
+      bg.border = NA
+    )
+  }
+  
+  if (!is.null(file)) {
+    png(
+      filename = file,
+      width = width_mm,
+      height = height_mm,
+      units = "mm",
+      res = res,
+      pointsize = 5,
+      bg = "transparent"
+    )
+    draw_fun()
+    dev.off()
+  } else {
+    draw_fun()
+  }
+}
+
+plot_go_chord(
+  edges = edges_npc,
+  go_genes = go_genes_npc,
+  term_col_global = term_col_global,
+  file = "../Figures/Figure3C.png"
+)
+
+plot_go_chord(
+  edges = edges_tbr1,
+  go_genes = go_genes_tbr1,
+  term_col_global = term_col_global,
+  file = "../Figures/Figure3D.png"
+)
+```
+
+# Figure 3E & Supp. Fig 3D
+
+```{r}
+df<-readRDS("../data/PerezFernandez_2026.rds")
+DefaultAssay(df)<-"RNA"
+```
+
+```{r}
+df_fused <- subset(df, condition == "FUSED")
+df_coctrl <- subset(df, condition == "CO")
+df_roctrl <- subset (df, condition == "RO")
+```
+
+```{r}
+dfs <- list(
+  FUSED = df_fused,
+  CO    = df_coctrl,
+  RO    = df_roctrl
+)
+
+CellChatDB <- CellChatDB.human
+
+for (tmp in names(dfs)) {
+  obj <- dfs[[tmp]]
+  
+  Idents(obj) <- "celltype"
+  
+  data.input <- GetAssayData(obj, assay = "RNA", layer = "data")
+  rownames(data.input) <- toupper(rownames(data.input))
+  
+  cellchat_obj <- createCellChat(
+    object = data.input,
+    meta = obj@meta.data,
+    group.by = "celltype"
+  )
+  
+  cellchat_obj@DB <- CellChatDB
+  
+  cellchat_obj <- cellchat_obj %>%
+    subsetData() %>% 
+    identifyOverExpressedGenes() %>%
+    identifyOverExpressedInteractions()
+  
+  cellchat_obj@idents <- droplevels(cellchat_obj@idents)
+  
+  cellchat_obj <- cellchat_obj %>%
+    computeCommunProb() %>%
+    filterCommunication(min.cells = 100) %>%
+    computeCommunProbPathway() %>%
+    aggregateNet() %>%
+    netAnalysis_computeCentrality(slot.name = "netP") %>%
+    identifyCommunicationPatterns(pattern = "outgoing", k = 5) %>%
+    identifyCommunicationPatterns(pattern = "incoming", k = 5)
+    
+  
+  saveRDS(cellchat_obj, paste0("../data/Cellchat_", tmp, ".rds"))
+}
+```
+
+```{r}
+cellchat_CO_CTRL <- readRDS ("../data/Cellchat_CO.rds")
+cellchat_RO_CTRL <- readRDS ("../data/Cellchat_RO.rds")
+cellchat_FUSED <- readRDS ("../data/Cellchat_FUSED.rds")
+```
+
+```{r}
+object.list_CO <- list(CO_CTRL = cellchat_CO_CTRL, FUSED = cellchat_FUSED)
+cellchat_COcomp <- mergeCellChat(object.list_CO, add.names = names(object.list_CO))
+i <- 1
+pathway.union <- union(
+  object.list_CO[[i]]@netP$pathways,
+  object.list_CO[[i + 1]]@netP$pathways
+)
+
+ht1 <- netAnalysis_signalingRole_heatmap(
+  object.list_CO[[i]],
+  pattern = "outgoing",
+  signaling = pathway.union,
+  title = names(object.list_CO)[i],
+  width = 7,
+  height = 15
+)
+
+ht2 <- netAnalysis_signalingRole_heatmap(
+  object.list_CO[[i + 1]],
+  pattern = "outgoing",
+  signaling = pathway.union,
+  title = names(object.list_CO)[i + 1],
+  width = 7,
+  height = 15
+)
+
+dev.new(width = 28, height = 30)
+draw(ht1 + ht2, ht_gap = unit(0.8, "cm"))
+
+
+# png(
+#   "../Figures/Figure3E.png",
+#   units = "in",
+#   width = 10,
+#   height = 10,
+#   res = 300
+# )
+ht1@bottom_annotation@anno_list$group@color_mapping@colors <-RPF_palette_2
+ht1@bottom_annotation@anno_list$group@color_mapping@full_col<-RPF_palette_2
+
+ht2@bottom_annotation@anno_list$group@color_mapping@colors <-RPF_palette_2
+ht2 @bottom_annotation@anno_list$group@color_mapping@full_col<-RPF_palette_2
+draw(ht1 + ht2, ht_gap = unit(1, "cm"))
+
+dev.off()
+```
+
+```{r}
+
+object.list_CO <- list(CO_CTRL = cellchat_CO_CTRL, FUSED = cellchat_FUSED)
+cellchat_COcomp <- mergeCellChat(object.list_CO, add.names = names(object.list_CO))
+i <- 1
+pathway.union <- union(
+  object.list_CO[[i]]@netP$pathways,
+  object.list_CO[[i + 1]]@netP$pathways
+)
+
+ht1 <- netAnalysis_signalingRole_heatmap(
+  object.list_CO[[i]],
+  pattern = "incoming",
+  signaling = pathway.union,
+  title = names(object.list_CO)[i],
+  width = 7,
+  height = 15
+)
+
+ht2 <- netAnalysis_signalingRole_heatmap(
+  object.list_CO[[i + 1]],
+  pattern = "incoming",
+  signaling = pathway.union,
+  title = names(object.list_CO)[i + 1],
+  width = 7,
+  height = 15
+)
+
+dev.new(width = 28, height = 30)
+draw(ht1 + ht2, ht_gap = unit(0.8, "cm"))
+
+
+png(
+  "../Figures/Supp_Fig3D.png",
+  units = "in",
+  width = 10,
+  height = 10,
+  res = 300
+)
+
+draw(ht1 + ht2, ht_gap = unit(1, "cm"))
+
+dev.off()
+```
+
+# Supp Figure 3B
+
+```{r}
+netAnalysis_river(cellchat_FUSED, pattern = "outgoing")
+
+png(
+  "../Figures/Supp_Fig3B.png",
+  units = "in",
+  width = 10,
+  height = 10,
+  res = 300
+)
+
+draw(ht1 + ht2, ht_gap = unit(1, "cm"))
+
+dev.off()
+```
+
+
+# Supp Figure 3C
+
+```{r}
+mat <- cellchat_FUSED@net$weight
+groupSize <- as.numeric(table(cellchat_FUSED@idents))
+
+i <- which(rownames(mat) == "Serotonin_Neurons")
+
+mat2 <- matrix(0, nrow = nrow(mat), ncol = ncol(mat), dimnames = dimnames(mat))
+mat2[i, ] <- mat[i, ]
+
+pdf("../Figures/Supp_Figure_3C.pdf", width = 10, height = 10)
+
+par(mfrow = c(1,1), xpd = TRUE)
+
+netVisual_circle(
+  mat2,
+  vertex.weight = groupSize,
+  weight.scale = TRUE,
+  edge.weight.max = max(mat),
+  title.name = "Serotonin_Neurons"
+)
+
+dev.off()
+```
+
+# Supplementary tables
+
+## Cell proportion
+
+```{r}
+telen_cells <- c(
+  "Telen_NPC",
+  "Telen_IPC",
+  "Telen_NBL",
+  "TBR1+_Neurons",
+  "SATB2+_Neurons"
+)
+
+cell_counts <- df@meta.data %>%
+  filter(condition %in% c("CO", "FUSED"),
+         celltype %in% telen_cells) %>%
+  mutate(
+    condition = factor(condition, levels = c("CO", "FUSED")),
+    celltype = factor(celltype, levels = telen_cells)
+  ) %>%
+  group_by(condition, celltype) %>%
+  summarise(n = n(), .groups = "drop") %>%
+  group_by(condition) %>%
+  mutate(
+    percentage_total = n / sum(n) * 100,
+    percentage_telen = n / sum(n) * 100
+  ) %>%
+  ungroup()
+
+cell_counts_clean <- cell_counts %>%
+  mutate(
+    percentage_total = round(percentage_total, 2),
+    percentage_telen = round(percentage_telen, 2)
+  ) %>%
+  arrange(condition, celltype)
+
+cell_counts_wide <- cell_counts_clean %>%
+  dplyr::select(condition, celltype, percentage_telen) %>%
+  pivot_wider(
+    names_from = celltype,
+    values_from = percentage_telen
+  )
+
+wb <- createWorkbook()
+
+addWorksheet(wb, "telen_long")
+writeData(wb, "telen_long", cell_counts_clean)
+
+addWorksheet(wb, "telen_wide")
+writeData(wb, "telen_wide", cell_counts_wide)
+
+saveWorkbook(
+  wb,
+  "../Supplementary_Tables/Supp_Table_Telencephalic_Proportions_CO_vs_FUSED.xlsx",
+  overwrite = TRUE
+)
+
+```
+
+# CellChat
+
+```{r}
+dir.create("../Supplementary_Tables/Cell_Chat", showWarnings = FALSE, recursive = TRUE)
+
+pathway.union <- union(
+  cellchat_CO_CTRL@netP$pathways,
+  cellchat_FUSED@netP$pathways
+)
+
+ht_out_CO <- netAnalysis_signalingRole_heatmap(
+  cellchat_CO_CTRL,
+  pattern = "outgoing",
+  signaling = pathway.union,
+  title = "CO_CTRL",
+  width = 7,
+  height = 15
+)
+
+ht_out_FUSED <- netAnalysis_signalingRole_heatmap(
+  cellchat_FUSED,
+  pattern = "outgoing",
+  signaling = pathway.union,
+  title = "FUSED",
+  width = 7,
+  height = 15
+)
+
+ht_in_CO <- netAnalysis_signalingRole_heatmap(
+  cellchat_CO_CTRL,
+  pattern = "incoming",
+  signaling = pathway.union,
+  title = "CO_CTRL",
+  width = 7,
+  height = 15
+)
+
+ht_in_FUSED <- netAnalysis_signalingRole_heatmap(
+  cellchat_FUSED,
+  pattern = "incoming",
+  signaling = pathway.union,
+  title = "FUSED",
+  width = 7,
+  height = 15
+)
+
+mat_to_long <- function(mat, dataset, pattern) {
+  df <- as.data.frame(mat)
+  df$pathway <- rownames(mat)
+
+  df_long <- pivot_longer(
+    df,
+    cols = -pathway,
+    names_to = "celltype",
+    values_to = "strength"
+  )
+
+  df_long$dataset <- dataset
+  df_long$pattern <- pattern
+
+  df_long %>%
+    dplyr::select(dataset, pattern, pathway, celltype, strength)
+}
+
+mat_to_wide <- function(mat) {
+  df <- as.data.frame(mat)
+  df$pathway <- rownames(mat)
+  df %>%
+    dplyr::select(pathway, everything())
+}
+
+out_CO_mat    <- ht_out_CO@matrix
+out_FUSED_mat <- ht_out_FUSED@matrix
+in_CO_mat     <- ht_in_CO@matrix
+in_FUSED_mat  <- ht_in_FUSED@matrix
+
+out_CO_long    <- mat_to_long(out_CO_mat, "CO_CTRL", "outgoing")
+out_FUSED_long <- mat_to_long(out_FUSED_mat, "FUSED", "outgoing")
+in_CO_long     <- mat_to_long(in_CO_mat, "CO_CTRL", "incoming")
+in_FUSED_long  <- mat_to_long(in_FUSED_mat, "FUSED", "incoming")
+
+role_long <- bind_rows(
+  out_CO_long,
+  out_FUSED_long,
+  in_CO_long,
+  in_FUSED_long
+)
+
+out_CO_wide    <- mat_to_wide(out_CO_mat)
+out_FUSED_wide <- mat_to_wide(out_FUSED_mat)
+in_CO_wide     <- mat_to_wide(in_CO_mat)
+in_FUSED_wide  <- mat_to_wide(in_FUSED_mat)
+
+comm_CO    <- subsetCommunication(cellchat_CO_CTRL)
+comm_FUSED <- subsetCommunication(cellchat_FUSED)
+wb <- createWorkbook()
+
+addWorksheet(wb, "pathway_union")
+writeData(wb, "pathway_union", data.frame(pathway = pathway.union))
+
+addWorksheet(wb, "outgoing_CO_wide")
+writeData(wb, "outgoing_CO_wide", out_CO_wide)
+
+addWorksheet(wb, "outgoing_FUSED_wide")
+writeData(wb, "outgoing_FUSED_wide", out_FUSED_wide)
+
+addWorksheet(wb, "incoming_CO_wide")
+writeData(wb, "incoming_CO_wide", in_CO_wide)
+
+addWorksheet(wb, "incoming_FUSED_wide")
+writeData(wb, "incoming_FUSED_wide", in_FUSED_wide)
+
+addWorksheet(wb, "role_long")
+writeData(wb, "role_long", role_long)
+
+addWorksheet(wb, "comm_CO")
+writeData(wb, "comm_CO", comm_CO)
+
+addWorksheet(wb, "comm_FUSED")
+writeData(wb, "comm_FUSED", comm_FUSED)
+
+saveWorkbook(
+  wb,
+  "../Supplementary_Tables/Cell_Chat/Supp_Table_CellChat_CO_vs_FUSED.xlsx",
+  overwrite = TRUE
+)
+```
+
+
+# Revision
+
+## RO only images
+
+```{r}
+tmp<-subset(df, sample=="RO_CTRL")
+tmp <- subset(tmp, !(celltype %in% c("Telen_NPC", "Telen_IPC", "Telen_NBL", "TBR1+_Neurons", "SATB2+_Neurons", "Unknown")))
+```
+
+```{r}
+p4<-DimPlot(tmp, reduction="umap_hvg", group.by="celltype", cols=RPF_palette_2) & NoAxes()
+p5<-DimPlot(tmp, reduction="umap_hvg", group.by="sample") & NoAxes() 
+p5+p4
+```
+
+```{r}
+p <- DimPlot(tmp, reduction = "umap_hvg", group.by = "celltype", pt.size = 0.1, cols=RPF_palette_2)  & NoAxes() & ggtitle(NULL) & NoLegend()
+ggsave(
+  filename = "../Figures/REV_UMAP_RO2.png",
+  plot     = p,
+  width    = 45*3,
+  height   = 45*3,
+  units    = "mm",
+  dpi      = 600
+)
+```
+
+```{r, fig.width=10, fig.heigth=2}
+Idents(tmp)<-"celltype"
+toplot <- unique(c("NES", "SOX2", "MKI67", "TOP2A",   "NR2F2", "NR2F1", "DLG4", "SHH", "FOXA2", "LMX1B", "GALNT3", "RERGL", "ANO3", "HTR2A", "HTR2C", "OTX2", "LMX1A", "TPH2", "FEV", "DDC", "SLC6A4", "GAD1", "GAD2",  "SLC17A6", "KCNC2", "KLHL1", "EN1", "TH", "LMCD1","HAS2",   "SLC6A4", "GFAP", "AQP4", "COL6A3", "COL1A2"))
+
+toplot <- unique(toplot)
+
+p11 <- DotPlot(tmp, features = toplot, cols = diverging_palette(5))
+filtered_data <- p11$data %>%
+  group_by(features.plot) %>%
+  filter(any(pct.exp >= 0)) %>%
+  ungroup()
+expression_matrix <- filtered_data %>%
+  dplyr::select(features.plot, id, avg.exp.scaled) %>%
+  tidyr::pivot_wider(names_from = id, values_from = avg.exp.scaled, values_fill = 0) %>%
+  tibble::column_to_rownames("features.plot")
+gene_order <- hclust(dist(expression_matrix))$order
+sorted_genes <- rownames(expression_matrix)[gene_order]
+p11 <- DotPlot(tmp, features = toplot, cols = diverging_palette(5)) +
+  scale_color_gradientn(
+    colors = diverging_palette_4(5), 
+    limits = c(-max(abs(filtered_data$avg.exp.scaled)), max(abs(filtered_data$avg.exp.scaled)))
+  ) +
+  #coord_flip() +
+  #labs(title = "Filtered DotPlot: Genes clustered by similarity") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1,size=8)) +
+  theme(axis.text.x=element_text(angle=45, hjust=1, size=8))
+
+p11
+```
+
+```{r}
+Dotplot <- p11 +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 0),
+    axis.ticks = element_blank(),
+    axis.line  = element_blank(),
+    plot.margin = margin(2,2, 2, 3, unit = "pt")
+  ) +
+  scale_size(range = c(0, 2.5))
+
+ggsave(
+  filename = "../Figures/REV_RO_Dotplot.png",
+  plot     = Dotplot,
+  width    = 90,
+  height   = 50,
+  units    = "mm",
+  dpi      = 600
+)
+
+```
+
+## Modules
+
+```{r}
+marker_sets <- list(
+  Serotonergic = c("TPH2", "TPH1", "DDC", "SLC18A2", "SLC6A4", "FEV"),
+  GABAergic = c("GAD1", "GAD2", "SLC32A1", "SLC6A1"),
+  Glutamatergic = c("SLC17A6", "SLC17A7", "SLC17A8"),
+  Catecholaminergic = c("TH", "DBH", "SLC6A3", "SLC6A2", "PNMT","CHRNA4", "CHRNB3", "NPW"),
+  Cholinergic = c("CHAT", "SLC18A3"),
+  Peptidergic = c("TAC1", "PDYN", "PENK", "CRH", "CRHBP", "TRH", "NPY", "SST", "NOS1", "CCK", "CARTPT", "UCN", "POSTN", "GAL", "ADCYAP1", "GRP")
+)
+
+regional_sets <- list(
+  Isthmus_r1         = c("EN1", "EN2", "GBX2", "PAX5", "FGF8", "NR2F2"),
+  r2_r3              = c("HOXA2", "HOXB2", "NR2F1"),
+  r4                 = c("HOXB1", "HOXA1"),
+  r5_r6              = c("EGR2", "HOXA3", "HOXB3", "HOXD3", "MAFB"),
+  r7_r8              = c("HOXA4", "HOXB4", "HOXD4", "HOXA5", "HOXB5")
+)
+
+
+htr_genes <- c("HTR1A", "HTR1B", "HTR1D", "HTR1E", "HTR1F",
+               "HTR2A", "HTR2B", "HTR2C",
+               "HTR3A", "HTR3B", "HTR4", "HTR5A", "HTR6", "HTR7")
+
+keep_present <- function(x, obj) {
+  present <- intersect(unique(x), rownames(obj))
+  missing <- setdiff(unique(x), present)
+  if (length(missing)) message("Not detected, dropped: ",
+                               paste(missing, collapse = ", "))
+  present
+}
+```
+ 
+```{r}
+score_sets <- lapply(marker_sets[setdiff(names(marker_sets),
+                                         c("Specification", "DR_subtype"))],
+                     keep_present, obj = tmp)
+score_sets <- score_sets[lengths(score_sets) >= 2]
+
+tmp <- AddModuleScore(tmp, features = score_sets,
+                      name = "MS_", seed = 42, ctrl = 50)
+ms_cols <- paste0("MS_", seq_along(score_sets))
+colnames(tmp@meta.data)[match(ms_cols, colnames(tmp@meta.data))] <-
+  paste0("score_", names(score_sets))
+```
+
+```{r, fig.asp=0.8}
+score_cols <- paste0("score_", names(score_sets))
+FeaturePlot(tmp, features = score_cols, reduction = "umap_hvg", ncol = 4) &
+  NoAxes() & NoLegend() &
+  scale_color_gradientn(colors = rna_palette_2(10))
+```
+
+```{r}
+for (i in seq_along(score_cols)) {
+  p <- FeaturePlot(tmp, features = score_cols[i], reduction = "umap_hvg",
+                   pt.size = 0.1) &
+    NoAxes() & ggtitle(NULL) & NoLegend() &
+    scale_color_gradientn(colors = rna_palette_2(10))
+
+  ggsave(
+    filename = paste0("../Figures/REV_", names(score_sets)[i], ".png"),
+    plot     = p,
+    width    = 45*3,
+    height   = 45*3,
+    units    = "mm",
+    dpi      = 600
+  )
+}
+```
+
+
+```{r}
+reg_score_sets <- lapply(regional_sets, keep_present, obj = tmp)
+reg_score_sets <- reg_score_sets[lengths(reg_score_sets) >= 2]
+
+tmp <- AddModuleScore(tmp, features = reg_score_sets,
+                      name = "RS_", seed = 42, ctrl = 50)
+rs_cols <- paste0("RS_", seq_along(reg_score_sets))
+colnames(tmp@meta.data)[match(rs_cols, colnames(tmp@meta.data))] <-
+  paste0("regscore_", names(reg_score_sets))
+
+reg_score_cols <- paste0("regscore_", names(reg_score_sets))
+```
+
+
+```{r}
+library(scales)
+
+# floor the ramp at 0; handle modules whose max is 0 or negative
+score_limits <- function(v) {
+  hi <- suppressWarnings(max(v, na.rm = TRUE))
+  if (!is.finite(hi) || hi <= 0) hi <- 1   # all-zero / all-negative module -> uniform gray
+  c(0, hi)
+}
+
+plot_score <- function(obj, feat, pal = rna_palette_2(10), red = "umap_hvg") {
+  FeaturePlot(obj, features = feat, reduction = red, pt.size = 0.1) &
+    NoAxes() & ggtitle(NULL) & NoLegend() &
+    scale_color_gradientn(colors = pal,
+                          limits = score_limits(obj@meta.data[[feat]]),
+                          oob    = scales::squish)
+}
+
+patchwork::wrap_plots(
+  lapply(reg_score_cols, function(f) plot_score(tmp, f)), ncol = 4)
+
+for (i in seq_along(reg_score_cols)) {
+  p <- plot_score(tmp, reg_score_cols[i])
+  ggsave(
+    filename = paste0("../Figures/REV_", names(reg_score_sets)[i], ".png"),
+    plot     = p,
+    width    = 45*3,
+    height   = 45*3,
+    units    = "mm",
+    dpi      = 600
+  )
+}
+```
+
+## CO only images
+
+```{r}
+tmp<-subset(df, sample=="CO_CTRL")
+tmp <- subset(tmp, !(celltype %in% c(" Hindbrain_glia", "Hindbrain_NPC", "Ventral_GABA+_Neurons", "Subcortex_Neurons", "Serotonin_Neurons", "CyP","Midbrain_NPC", "Hindbrain_glia", "Unknown")))
+```
+
+```{r}
+p4<-DimPlot(tmp, reduction="umap_hvg", group.by="celltype", cols=RPF_palette_2) & NoAxes()
+p5<-DimPlot(tmp, reduction="umap_hvg", group.by="sample") & NoAxes() 
+p5+p4
+```
+
+```{r}
+p <- DimPlot(tmp, reduction = "umap_hvg", group.by = "celltype", pt.size = 0.1, cols=RPF_palette_2)  & NoAxes() & ggtitle(NULL) & NoLegend()
+ggsave(
+  filename = "../Figures/REV_UMAP_CO2.png",
+  plot     = p,
+  width    = 45*3,
+  height   = 45*3,
+  units    = "mm",
+  dpi      = 600
+)
+```
+
+```{r}
+tmp<-subset(df, sample=="CO_CTRL")
+tmp <- subset(tmp, !(celltype %in% c(" Hindbrain_glia", "Hindbrain_NPC", "Ventral_GABA+_Neurons", "Subcortex_Neurons", "Serotonin_Neurons", "CyP","Midbrain_NPC", "Hindbrain_glia", "Unknown")))
+```
+
+```{r}
+p4<-DimPlot(tmp, reduction="umap_hvg", group.by="celltype", cols=RPF_palette_2) & NoAxes()
+p5<-DimPlot(tmp, reduction="umap_hvg", group.by="sample") & NoAxes() 
+p5+p4
+```
+
+```{r}
+p <- DimPlot(tmp, reduction = "umap_hvg", group.by = "celltype", pt.size = 0.1, cols=RPF_palette_2)  & NoAxes() & ggtitle(NULL) & NoLegend()
+ggsave(
+  filename = "../Figures/REV_UMAP_CO2.png",
+  plot     = p,
+  width    = 45*3,
+  height   = 45*3,
+  units    = "mm",
+  dpi      = 600
+)
+```
+
+## Dotplot
+
+```{r, fig.width=10, fig.heigth=2}
+Idents(tmp)<-"celltype"
+toplot <- unique(c("PAX6", "SOX2", "FOXG1", "EOMES",  "DCX", "ELAVL4", "NEUROD2","TBR1", "BCL11B",  "SLC17A7", "SATB2", "CUX2", "COL6A3", "COL1A2"))
+
+toplot <- unique(toplot)
+
+p11 <- DotPlot(tmp, features = toplot, cols = diverging_palette(5))
+filtered_data <- p11$data %>%
+  group_by(features.plot) %>%
+  filter(any(pct.exp >= 0)) %>%
+  ungroup()
+expression_matrix <- filtered_data %>%
+  dplyr::select(features.plot, id, avg.exp.scaled) %>%
+  tidyr::pivot_wider(names_from = id, values_from = avg.exp.scaled, values_fill = 0) %>%
+  tibble::column_to_rownames("features.plot")
+gene_order <- hclust(dist(expression_matrix))$order
+sorted_genes <- rownames(expression_matrix)[gene_order]
+p11 <- DotPlot(tmp, features = toplot, cols = diverging_palette(5)) +
+  scale_color_gradientn(
+    colors = diverging_palette_4(5), 
+    limits = c(-max(abs(filtered_data$avg.exp.scaled)), max(abs(filtered_data$avg.exp.scaled)))
+  ) +
+  #coord_flip() +
+  #labs(title = "Filtered DotPlot: Genes clustered by similarity") +
+  theme_minimal() +
+  theme(axis.text.y = element_text(angle = 0, hjust = 1,size=8)) +
+  theme(axis.text.x=element_text(angle=45, hjust=1, size=8))
+
+p11
+```
+
+
+```{r}
+Dotplot <- p11 +
+  theme(
+    legend.position = "none",
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text.x = element_text(size = 6),
+    axis.text.y = element_text(size = 0),
+    axis.ticks = element_blank(),
+    axis.line  = element_blank(),
+    plot.margin = margin(2,2, 2, 3, unit = "pt")
+  ) +
+  scale_size(range = c(0, 2.5))
+
+ggsave(
+  filename = "../Figures/REV_CO_Dotplot.png",
+  plot     = Dotplot,
+  width    = 50,
+  height   = 50,
+  units    = "mm",
+  dpi      = 600
+)
+
+```
+
+# Pseudotime
+
+```{r params}
+GRP_VAR <- "sample"    
+GRP_A   <- "CO_CTRL" 
+GRP_B   <- "CO_FUSED" 
+
+LINEAGE <- c("Telen_NPC", "Telen_IPC", "Telen_NBL", "TBR1+_Neurons", "SATB2+_Neurons")
+
+# monocle3 always reads the reduction literally named "umap"; the figures use
+# "umap_hvg", so it is copied onto a working object before conversion.
+MONOCLE_UMAP <- "umap_hvg"
+```
+
+```{r subset}
+keep_cells <- colnames(df)[df$celltype %in% LINEAGE &
+                           df$orig.ident %in% c(GRP_A, GRP_B)]
+tel <- subset(df, cells = keep_cells)
+
+tel$celltype <- factor(as.character(tel$celltype), levels = LINEAGE)
+tel$orig.ident      <- factor(as.character(tel$orig.ident), levels = c(GRP_A, GRP_B))
+
+DefaultAssay(tel) <- "RNA"
+tel <- NormalizeData(tel, verbose = FALSE)
+```
+
+## Trajectory (monocle3)
+
+```{r monocle-build, message=FALSE, warning=FALSE}
+library(monocle3)
+library(SeuratWrappers)
+library(igraph)
+
+tel_m <- tel
+tel_m[["umap"]] <- CreateDimReducObject(
+  embeddings = Embeddings(tel, reduction = MONOCLE_UMAP),
+  key        = "UMAP_",
+  assay      = DefaultAssay(tel))
+
+cds <- SeuratWrappers::as.cell_data_set(tel_m)
+cds <- monocle3::cluster_cells(cds, reduction_method = "UMAP")
+cds <- monocle3::learn_graph(cds, use_partition = FALSE, close_loop = FALSE)
+
+root_cells <- colnames(tel_m)[tel_m$celltype == "Telen_NPC"]
+
+closest_vertex <- cds@principal_graph_aux[["UMAP"]]$pr_graph_cell_proj_closest_vertex
+closest_vertex <- as.matrix(closest_vertex[colnames(cds), ])
+root_vertex <- igraph::V(monocle3::principal_graph(cds)[["UMAP"]])$name[
+  as.numeric(names(which.max(table(closest_vertex[root_cells, ]))))]
+
+cds <- monocle3::order_cells(cds, root_pr_nodes = root_vertex)
+tel$pseudotime <- monocle3::pseudotime(cds)[colnames(tel)]
+```
+
+```{r monocle-plot-stripped, fig.asp=0.45}
+strip_theme <- theme_void() +
+  theme(
+    legend.position = "none",
+    plot.title      = element_blank()
+  )
+
+p1 <- monocle3::plot_cells(cds, color_cells_by = "celltype",
+                           label_groups_by_cluster = FALSE,
+                           label_leaves = FALSE, label_branch_points = FALSE,
+                           cell_size = 0.4) +
+  scale_colour_manual(values = RPF_palette_2) +
+  strip_theme
+
+p2 <- monocle3::plot_cells(cds, color_cells_by = "pseudotime",
+                           label_groups_by_cluster = FALSE,
+                           label_leaves = FALSE, label_branch_points = FALSE,
+                           cell_size = 0.4) +
+  scale_color_viridis_c(option = "viridis", direction = 1) +
+  strip_theme
+
+ggsave(
+  filename = "../Figures/Pseudotime_by_celltype.png",
+  plot     = p1,
+  width    = 45 * 2,
+  height   = 45 * 2,
+  units    = "mm",
+  dpi      = 600
+)
+
+ggsave(
+  filename = "../Figures/Pseudotime.png",
+  plot     = p2,
+  width    = 45 * 2,
+  height   = 45 * 2,
+  units    = "mm",
+  dpi      = 600
+)
+```
+
+```{r princurve, message=FALSE, warning=FALSE}
+suppressPackageStartupMessages(library(princurve))
+
+emb_p <- Embeddings(tel, reduction = "pca")
+emb_p <- emb_p[, seq_len(min(20, ncol(emb_p))), drop = FALSE]
+
+ref_rows <- which(tel$orig.ident == GRP_A)
+
+# Initialise on the reference stage ordering so the curve runs
+# NPC -> IPC -> NBL -> neuron rather than in an arbitrary direction.
+pc_fit <- princurve::principal_curve(
+  x        = emb_p[ref_rows, , drop = FALSE],
+  smoother = "smooth_spline",
+  trace    = FALSE)
+
+proj_all <- princurve::project_to_curve(
+  x = emb_p,
+  s = pc_fit$s[pc_fit$ord, , drop = FALSE])
+
+tel$pt_ref <- proj_all$lambda
+stage_rank <- setNames(seq_along(LINEAGE), LINEAGE)
+tel$stage_num <- unname(stage_rank[as.character(tel$celltype)])
+
+tel$pt_ref <- (tel$pt_ref - min(tel$pt_ref)) /
+              (max(tel$pt_ref) - min(tel$pt_ref))
+if (stats::cor(tel$pt_ref, tel$stage_num, method = "spearman") < 0) {
+  tel$pt_ref <- 1 - tel$pt_ref
+}
+```
+
+```{r pt-density-heatmap-strip, fig.asp=0.7}
+p <- ggplot(tel@meta.data, aes(pt_ref, fill = celltype)) +
+  geom_histogram(bins = 60) +
+  facet_grid(celltype ~ orig.ident, scales = "free_y", axes = "all") +
+  scale_fill_manual(values = RPF_palette_2, guide = "none") +
+  scale_x_continuous(expand = expansion(mult = c(0, 0.05))) +
+  scale_y_continuous(expand = expansion(mult = c(0, 0.05))) +
+  theme_classic(base_size = 10) +
+  theme(
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    axis.text    = element_text(size = 7),
+    axis.line    = element_line(colour = "black"),
+    axis.ticks   = element_line(colour = "black"),
+    strip.text.x = element_blank(),
+    strip.text.y = element_blank()
+  )
+p
+
+ggsave(
+  filename = "../Figures/Pseudotime_histogram.png",
+  plot     = p,
+  width    = 105,
+  height   = 80,
+  units    = "mm",
+  dpi      = 600
+)
+```
+
+# SessionInfo
+
+```{r}
+sessionInfo()
+```
+
+

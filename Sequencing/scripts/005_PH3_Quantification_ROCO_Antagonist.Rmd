@@ -1,0 +1,183 @@
+---
+title: "005_PH3_Quantification_ROCO_Antagonist"
+author: "Raquel Perez Fernandez"
+date: "2026/09/17"
+description: ""
+output:
+  bookdown::html_document2:
+    code_folding: hide
+    fig_caption: true
+    toc: yes
+    toc_depth: 4
+    toc_float:
+      collapsed: yes
+link-citations: yes
+editor_options:
+  markdown:
+    wrap: 72
+---
+
+Effect of serotonin signalling inhibition (KET, VOL) on progenitor proliferation
+in fused organoids, lines 112#2 and 28#4. PH3+ counts normalised to VZ Basal
+length, outliers removed at the VZ level, values aggregated VZ -> image ->
+organoid. All comparisons are at the organoid level on untransformed values.
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, tidy = TRUE, fig.asp = 0.5, fig.width = 12,
+                      warning = TRUE, message = TRUE)
+```
+
+```{r, warning=FALSE, message=FALSE}
+source("../helpers/Set_environment.R")
+source("../helpers/Set_functions.R")
+library(readxl)
+set.seed(42)
+
+xlsx_path <- "../rawdata/Quantifications/RO_QUANTIFICATION.xlsx"
+
+keep_treatments <- c("CTRL", "KET", "VOL")
+iqr_mult        <- 1.5
+
+line_batch_shapes <- c(
+  "112#2_B4" = 16,
+  "112#2_B5" = 17,
+  "28#4_B3"  = 15,
+  "28#4_B4"  = 18,
+  "28#4_B5"  = 8
+)
+
+# unpaired Welch t-test of each treatment against CTRL within a grouping
+welch_vs_ctrl <- function(d, ...) {
+  d %>%
+    dplyr::group_by(...) %>%
+    dplyr::group_modify(function(g, key) {
+      ctrl <- g$Value[g$Treatment == "CTRL"]
+      g %>%
+        dplyr::filter(Treatment != "CTRL") %>%
+        dplyr::group_by(Treatment) %>%
+        dplyr::summarise(
+          n = dplyr::n(),
+          p = if (dplyr::n() >= 2 && length(ctrl) >= 2) t.test(Value, ctrl)$p.value else NA_real_,
+          .groups = "drop"
+        )
+    }) %>%
+    dplyr::ungroup() %>%
+    dplyr::mutate(Treatment = droplevels(Treatment)) %>%
+    dplyr::mutate(label = paste0("n=", n, "\np=",
+                             dplyr::if_else(is.na(p), "NA", sprintf("%.2e", p))))
+}
+```
+
+# Import and join
+
+```{r}
+quant <- readxl::read_excel(xlsx_path, sheet = "FUSION_Antagonist_Quant",
+                            na = c("", " ", "NA"))
+orga  <- readxl::read_excel(xlsx_path, sheet = "FUSION_Antagonist_Organoids",
+                            na = c("", " ", "NA"))
+df <- quant %>%
+  dplyr::mutate(dplyr::across(c(Basal_PH3, Basal_length),
+                              ~suppressWarnings(as.numeric(as.character(.x))))) %>%
+  dplyr::mutate(Batch = as.integer(Batch)) %>%
+  dplyr::left_join(orga, by = c("Line", "Batch", "Fused", "Treatment", "Image")) %>%
+  dplyr::filter(Treatment %in% keep_treatments) %>%
+  dplyr::mutate(Treatment = factor(Treatment, levels = keep_treatments)) %>%
+  dplyr::mutate(Organoid_id = dplyr::if_else(
+    is.na(Organoid), NA_character_,
+    paste(Line, Batch, Treatment, Organoid, sep = "_")))
+```
+
+# Total basal progenitors
+
+```{r}
+bp_org <- df %>%
+  dplyr::filter(!is.na(Organoid_id)) %>%
+  dplyr::mutate(Value = Basal_PH3 / Basal_length) %>%
+  dplyr::group_by(Line, Batch, Treatment) %>%
+  dplyr::mutate(q1 = quantile(Value, 0.25)) %>%
+  dplyr::mutate(q3 = quantile(Value, 0.75)) %>%
+  dplyr::mutate(is_outlier = Value < q1 - iqr_mult * (q3 - q1) |
+                             Value > q3 + iqr_mult * (q3 - q1)) %>%
+  dplyr::ungroup() %>%
+  dplyr::filter(!is_outlier) %>%
+  dplyr::group_by(Line, Batch, Treatment, Organoid_id, Image) %>%
+  dplyr::summarise(img_value = mean(Value), n_VZ = dplyr::n(), .groups = "drop") %>%
+  dplyr::group_by(Line, Batch, Treatment, Organoid_id) %>%
+  dplyr::summarise(Value    = mean(img_value),
+                   n_images = dplyr::n(),
+                   n_VZ     = sum(n_VZ),
+                   .groups  = "drop") %>%
+  dplyr::mutate(Line_Batch = paste0(Line, "_B", Batch))
+
+bp_stats <- welch_vs_ctrl(bp_org)
+
+```
+
+```{r}
+my_hex <- "#4DBBD5"
+
+base_plot <- ggplot(bp_org, aes(x = Treatment, y = Value)) +
+  geom_boxplot(fill = my_hex, outlier.shape = NA) +
+  geom_jitter(
+    aes(shape = Line_Batch),
+    width = 0.15,
+    size = 0.5,
+    stroke = 0.3
+  ) +
+  scale_shape_manual(values = line_batch_shapes) +
+  scale_y_continuous(expand = expansion(mult = c(0.05, 0.25))) +
+  theme_classic(base_size = 5) +
+  theme(
+    axis.line.x = element_line(),
+    axis.line.y = element_line(),
+    legend.position = "bottom",
+    legend.title = element_blank(),
+    legend.key.size = unit(2, "mm"),
+    legend.text = element_text(size = 3.5),
+    legend.spacing.x = unit(0.5, "mm"),
+    legend.margin = margin(t = -2, b = 0, l = 0, r = 0)
+  )
+
+```
+
+```{r}
+p <- base_plot +
+  geom_text(data = bp_stats, aes(x = Treatment, y = Inf, label = label),
+            vjust = 1.2, size = 4 / 2.845, inherit.aes = FALSE) +
+  labs(x = NULL, y = "Basal pH3+/ Basal length")
+p
+
+ggsave(
+  filename = "Figures/Figure4I.png",
+  plot = p,
+  width = 60, height = 30, units = "mm",
+  dpi = 600,
+  bg = "white"
+)
+```
+
+```{r}
+p_nolabel <- base_plot +
+  labs(x = NULL, y = NULL) +
+  theme(
+    legend.position = "none",
+    axis.text.x  = element_blank(),
+    axis.text.y  = element_blank(),
+    axis.title.x = element_blank(),
+    axis.title.y = element_blank(),
+    plot.margin  = margin(t = 2, r = 2, b = 2, l = 2)
+  )
+p_nolabel
+
+ggsave(
+  filename = "Figures/Figure4I_nolabels.png",
+  plot = p_nolabel,
+  width = 35, height = 26, units = "mm",
+  dpi = 600,
+  bg = "white"
+)
+```
+
+```{r}
+sessionInfo()
+```

@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "calcimetrics"
+version = "0.1.0"
+description = "Analysis of fluorescence imaging data from ImageJ/Fiji ROI exports"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "Lutz" }]
+keywords = ["calcium imaging", "fluorescence", "neuroscience", "ImageJ", "dF/F"]
+dependencies = [
+  "numpy>=1.24",
+  "pandas>=2.0",
+  "matplotlib>=3.7",
+  "scipy>=1.10",
+  "seaborn>=0.12",
+  "scienceplots>=2.0",
+]
+
+[project.optional-dependencies]
+interactive = [
+  "plotly>=5.0",
+  "ipywidgets>=8.0",
+]
+io-extra = [
+  "read-roi>=1.6",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
