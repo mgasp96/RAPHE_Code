@@ -20,6 +20,7 @@ Sequencing/data/002_Integrated_export/*
 !Sequencing/data/002_Integrated_export/rna_mtx/
 Sequencing/data/002_Integrated_export/rna_mtx/*
 !Sequencing/data/002_Integrated_export/rna_mtx/umap_HVG.csv
+!Sequencing/data/002_Integrated_export/rna_mtx/metadata.csv
 Sequencing/Figures/*
 !Sequencing/Figures/.gitkeep
 Sequencing/rawdata/*
